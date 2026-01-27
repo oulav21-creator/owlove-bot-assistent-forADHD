@@ -1,0 +1,15 @@
+[Unit]
+Description=Telegram Bot Напарник
+After=network.target
+
+[Service]
+Type=simple
+User=your_username
+WorkingDirectory=/path/to/botFocus
+Environment="PATH=/path/to/botFocus/venv/bin"
+ExecStart=/path/to/botFocus/venv/bin/python bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+libfreetype6-dev
+libpng-dev
+pkg-config
+libjpeg-dev
+zlib1g-dev
+libblas-dev
+liblapack-dev
+gfortran
