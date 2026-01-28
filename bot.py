@@ -175,6 +175,7 @@ class WorkoutStates(StatesGroup):
     waiting_plan_saturday = State()
     waiting_plan_sunday = State()
     editing_plan = State()
+    editing_single_day = State()  # Для редактирования отдельного дня
 
 
 # Инициализация
@@ -274,6 +275,57 @@ def get_back_to_workout_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text="Назад", callback_data="back_to_workout")]
     ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_workout_days_keyboard(user_id: int, plans: dict) -> InlineKeyboardMarkup:
+    """Создать клавиатуру с днями недели для тренировок"""
+    day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    today_weekday = datetime.now().weekday()
+    
+    buttons = []
+    row = []
+    for i, name in enumerate(day_names):
+        # Добавляем маркер если есть план на этот день
+        has_plan = i in plans and plans[i]
+        marker = "+" if has_plan else "-"
+        # Добавляем точку для сегодняшнего дня
+        today_marker = "*" if i == today_weekday else ""
+        button_text = f"[{marker}] {name}{today_marker}"
+        row.append(InlineKeyboardButton(text=button_text, callback_data=f"workout_day_{i}"))
+        
+        # По 4 кнопки в ряд (Пн-Чт, Пт-Вс)
+        if len(row) == 4 or i == 6:
+            buttons.append(row)
+            row = []
+    
+    # Добавляем кнопку "Назад"
+    buttons.append([InlineKeyboardButton(text="Назад", callback_data="back_to_workout")])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_workout_day_menu_keyboard(day_of_week: int, has_plan: bool, is_today: bool) -> InlineKeyboardMarkup:
+    """Создать меню для конкретного дня тренировки"""
+    buttons = []
+    
+    if has_plan:
+        if is_today:
+            buttons.append([
+                InlineKeyboardButton(text="Сделал", callback_data=f"workout_done_{day_of_week}"),
+                InlineKeyboardButton(text="Не сделал", callback_data=f"workout_skip_{day_of_week}")
+            ])
+        buttons.append([
+            InlineKeyboardButton(text="Редактировать", callback_data=f"workout_edit_day_{day_of_week}"),
+            InlineKeyboardButton(text="Удалить", callback_data=f"workout_delete_day_{day_of_week}")
+        ])
+    else:
+        buttons.append([
+            InlineKeyboardButton(text="Добавить план", callback_data=f"workout_edit_day_{day_of_week}")
+        ])
+    
+    buttons.append([InlineKeyboardButton(text="Назад к дням", callback_data="workout_training")])
+    
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -1878,68 +1930,55 @@ async def focus_delete_stats_confirm_handler(callback: CallbackQuery):
 # Обработчики WORKOUT → Тренировки
 @dp.callback_query(F.data == "workout_training")
 async def workout_training_handler(callback: CallbackQuery, state: FSMContext):
-    """Обработчик WORKOUT → Тренировки"""
+    """Обработчик WORKOUT → Тренировки - показывает таблицу дней недели"""
     await callback.answer()
+    await state.clear()
     user_id = callback.from_user.id
     
-    # Проверяем, есть ли план на неделю
-    plans = db.get_all_workout_plans(user_id)
-    if len(plans) < 7:
-        # Нужно заполнить план
-        try:
-            await callback.message.edit_text(
-                "Заполни план тренировок на неделю.\n\nНачнем с понедельника. Какие упражнения на понедельник?",
-                reply_markup=get_back_to_workout_keyboard()
-            )
-        except:
-            await callback.message.answer(
-                "Заполни план тренировок на неделю.\n\nНачнем с понедельника. Какие упражнения на понедельник?",
-                reply_markup=get_back_to_workout_keyboard()
-            )
-        await state.set_state(WorkoutStates.waiting_plan_monday)
-    else:
-        # Показываем план на сегодня
-        from datetime import datetime
-        today = datetime.now()
-        day_of_week = today.weekday()  # 0=понедельник, 6=воскресенье
-        
-        plan = db.get_workout_plan(user_id, day_of_week)
-        if plan:
-            exercises = plan.split('\n')
-            text = f"Тренировка на {['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'][day_of_week]}:\n\n"
-            for i, ex in enumerate(exercises, 1):
-                if ex.strip():
-                    text += f"{i}. {ex.strip()}\n"
-            
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Сделал", callback_data=f"workout_done_{day_of_week}")],
-                [InlineKeyboardButton(text="Не сделал", callback_data=f"workout_skip_{day_of_week}")],
-                [InlineKeyboardButton(text="Редактировать план", callback_data="workout_edit_plan")]
-            ])
-            try:
-                await callback.message.edit_text(text, reply_markup=keyboard)
-            except:
-                await callback.message.answer(text, reply_markup=keyboard)
+    # Получаем все планы пользователя
+    plans_list = db.get_all_workout_plans(user_id)
+    # Преобразуем в словарь {day_of_week: exercises}
+    plans = {p['day_of_week']: p['exercises'] for p in plans_list}
+    
+    # Формируем текст с информацией
+    day_names_full = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    today_weekday = datetime.now().weekday()
+    
+    text = "План тренировок на неделю:\n\n"
+    for i, name in enumerate(day_names_full):
+        marker = "[+]" if i in plans and plans[i] else "[-]"
+        today_marker = " <- сегодня" if i == today_weekday else ""
+        text += f"{marker} {name}{today_marker}\n"
+    
+    text += "\nВыбери день для просмотра или редактирования:"
+    
+    keyboard = get_workout_days_keyboard(user_id, plans)
+    
+    # Отправляем с картинкой
+    try:
+        import os
+        if os.path.exists("images/workout.png"):
+            photo = FSInputFile("images/workout.png")
         else:
-            try:
-                await callback.message.edit_text(
-                    "План на сегодня не заполнен. Заполни план тренировок.",
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="Заполнить план", callback_data="workout_edit_plan")]
-                    ])
-                )
-            except:
-                await callback.message.answer(
-                    "План на сегодня не заполнен. Заполни план тренировок.",
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="Заполнить план", callback_data="workout_edit_plan")]
-                    ])
-                )
+            photo = FSInputFile("images/workout.jpg")
+        
+        # Удаляем старое сообщение и отправляем новое с фото
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        await callback.message.answer_photo(photo=photo, caption=text, reply_markup=keyboard)
+    except Exception as e:
+        # Если картинка не найдена, отправляем текст
+        try:
+            await callback.message.edit_text(text, reply_markup=keyboard)
+        except:
+            await callback.message.answer(text, reply_markup=keyboard)
 
 
 @dp.callback_query(F.data == "workout_edit_plan")
 async def workout_edit_plan_handler(callback: CallbackQuery, state: FSMContext):
-    """Начать редактирование плана тренировок"""
+    """Начать редактирование плана тренировок (все дни подряд)"""
     await callback.answer()
     try:
         await callback.message.edit_text(
@@ -1952,6 +1991,177 @@ async def workout_edit_plan_handler(callback: CallbackQuery, state: FSMContext):
             reply_markup=get_back_to_workout_keyboard()
         )
     await state.set_state(WorkoutStates.waiting_plan_monday)
+
+
+@dp.callback_query(F.data.startswith("workout_day_"))
+async def workout_day_handler(callback: CallbackQuery, state: FSMContext):
+    """Просмотр конкретного дня тренировки"""
+    await callback.answer()
+    user_id = callback.from_user.id
+    day_of_week = int(callback.data.split("_")[-1])
+    
+    day_names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    day_name = day_names[day_of_week]
+    today_weekday = datetime.now().weekday()
+    is_today = day_of_week == today_weekday
+    
+    plan = db.get_workout_plan(user_id, day_of_week)
+    has_plan = bool(plan)
+    
+    if has_plan:
+        exercises = plan.split('\n')
+        text = f"{day_name}"
+        if is_today:
+            text += " (сегодня)"
+        text += ":\n\n"
+        for i, ex in enumerate(exercises, 1):
+            if ex.strip():
+                text += f"{i}. {ex.strip()}\n"
+    else:
+        text = f"{day_name}"
+        if is_today:
+            text += " (сегодня)"
+        text += "\n\nПлан не добавлен"
+    
+    keyboard = get_workout_day_menu_keyboard(day_of_week, has_plan, is_today)
+    
+    try:
+        # Удаляем сообщение с фото и отправляем текст
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        await callback.message.answer(text, reply_markup=keyboard)
+    except:
+        await callback.message.answer(text, reply_markup=keyboard)
+
+
+@dp.callback_query(F.data.startswith("workout_edit_day_"))
+async def workout_edit_day_handler(callback: CallbackQuery, state: FSMContext):
+    """Редактирование плана на конкретный день"""
+    await callback.answer()
+    day_of_week = int(callback.data.split("_")[-1])
+    
+    day_names = ["понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье"]
+    day_name = day_names[day_of_week]
+    
+    # Сохраняем день в состояние
+    await state.update_data(editing_day=day_of_week)
+    await state.set_state(WorkoutStates.editing_single_day)
+    
+    try:
+        await callback.message.edit_text(
+            f"Введи упражнения на {day_name}:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Отмена", callback_data="workout_training")]
+            ])
+        )
+    except:
+        await callback.message.answer(
+            f"Введи упражнения на {day_name}:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Отмена", callback_data="workout_training")]
+            ])
+        )
+
+
+@dp.message(WorkoutStates.editing_single_day)
+async def process_workout_single_day(message: Message, state: FSMContext):
+    """Обработка ввода плана на конкретный день"""
+    user_id = message.from_user.id
+    data = await state.get_data()
+    day_of_week = data.get("editing_day", 0)
+    
+    day_names = ["понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье"]
+    day_name = day_names[day_of_week]
+    
+    exercises = message.text.strip() if message.text else ""
+    if exercises:
+        db.set_workout_plan(user_id, day_of_week, exercises)
+        await state.clear()
+        
+        # Возвращаемся к таблице дней с картинкой
+        plans_list = db.get_all_workout_plans(user_id)
+        plans = {p['day_of_week']: p['exercises'] for p in plans_list}
+        
+        day_names_full = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+        today_weekday = datetime.now().weekday()
+        
+        text = f"План на {day_name} сохранен.\n\nПлан тренировок на неделю:\n\n"
+        for i, name in enumerate(day_names_full):
+            marker = "[+]" if i in plans and plans[i] else "[-]"
+            today_marker = " <- сегодня" if i == today_weekday else ""
+            text += f"{marker} {name}{today_marker}\n"
+        
+        text += "\nВыбери день для просмотра или редактирования:"
+        
+        keyboard = get_workout_days_keyboard(user_id, plans)
+        
+        try:
+            import os
+            if os.path.exists("images/workout.png"):
+                photo = FSInputFile("images/workout.png")
+            else:
+                photo = FSInputFile("images/workout.jpg")
+            await message.answer_photo(photo=photo, caption=text, reply_markup=keyboard)
+        except:
+            await message.answer(text, reply_markup=keyboard)
+    else:
+        await message.answer(
+            f"Введи упражнения текстом на {day_name}:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Отмена", callback_data="workout_training")]
+            ])
+        )
+
+
+@dp.callback_query(F.data.startswith("workout_delete_day_"))
+async def workout_delete_day_handler(callback: CallbackQuery):
+    """Удаление плана на конкретный день"""
+    await callback.answer()
+    user_id = callback.from_user.id
+    day_of_week = int(callback.data.split("_")[-1])
+    
+    day_names = ["понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье"]
+    day_name = day_names[day_of_week]
+    
+    # Удаляем план (устанавливаем пустую строку)
+    db.delete_workout_plan(user_id, day_of_week)
+    
+    # Возвращаемся к таблице дней
+    plans_list = db.get_all_workout_plans(user_id)
+    plans = {p['day_of_week']: p['exercises'] for p in plans_list}
+    
+    day_names_full = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    today_weekday = datetime.now().weekday()
+    
+    text = f"План на {day_name} удален.\n\nПлан тренировок на неделю:\n\n"
+    for i, name in enumerate(day_names_full):
+        marker = "[+]" if i in plans and plans[i] else "[-]"
+        today_marker = " <- сегодня" if i == today_weekday else ""
+        text += f"{marker} {name}{today_marker}\n"
+    
+    text += "\nВыбери день для просмотра или редактирования:"
+    
+    keyboard = get_workout_days_keyboard(user_id, plans)
+    
+    try:
+        import os
+        if os.path.exists("images/workout.png"):
+            photo = FSInputFile("images/workout.png")
+        else:
+            photo = FSInputFile("images/workout.jpg")
+        
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        await callback.message.answer_photo(photo=photo, caption=text, reply_markup=keyboard)
+    except:
+        try:
+            await callback.message.edit_text(text, reply_markup=keyboard)
+        except:
+            await callback.message.answer(text, reply_markup=keyboard)
 
 
 @dp.message(WorkoutStates.waiting_plan_monday)
@@ -2066,29 +2276,89 @@ async def process_workout_sunday(message: Message, state: FSMContext):
 @dp.callback_query(F.data.startswith("workout_done_"))
 async def workout_done_handler(callback: CallbackQuery):
     """Отметить тренировку как выполненную"""
-    await callback.answer()
+    await callback.answer("Тренировка выполнена")
     user_id = callback.from_user.id
     day_of_week = int(callback.data.split("_")[-1])
     today = datetime.now().date().isoformat()
     db.mark_workout_completed(user_id, today, day_of_week, True)
+    
+    # Возвращаемся к таблице дней
+    plans_list = db.get_all_workout_plans(user_id)
+    plans = {p['day_of_week']: p['exercises'] for p in plans_list}
+    
+    day_names_full = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    today_weekday = datetime.now().weekday()
+    
+    text = f"Тренировка на {day_names_full[day_of_week]} выполнена.\n\nПлан тренировок на неделю:\n\n"
+    for i, name in enumerate(day_names_full):
+        marker = "[+]" if i in plans and plans[i] else "[-]"
+        today_marker = " <- сегодня" if i == today_weekday else ""
+        text += f"{marker} {name}{today_marker}\n"
+    
+    text += "\nВыбери день для просмотра или редактирования:"
+    keyboard = get_workout_days_keyboard(user_id, plans)
+    
     try:
-        await callback.message.edit_text("Тренировка отмечена как выполненная.")
+        import os
+        if os.path.exists("images/workout.png"):
+            photo = FSInputFile("images/workout.png")
+        else:
+            photo = FSInputFile("images/workout.jpg")
+        
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        await callback.message.answer_photo(photo=photo, caption=text, reply_markup=keyboard)
     except:
-        await callback.message.answer("Тренировка отмечена как выполненная.")
+        try:
+            await callback.message.edit_text(text, reply_markup=keyboard)
+        except:
+            await callback.message.answer(text, reply_markup=keyboard)
 
 
 @dp.callback_query(F.data.startswith("workout_skip_"))
 async def workout_skip_handler(callback: CallbackQuery):
     """Отметить тренировку как пропущенную"""
-    await callback.answer()
+    await callback.answer("Тренировка пропущена")
     user_id = callback.from_user.id
     day_of_week = int(callback.data.split("_")[-1])
     today = datetime.now().date().isoformat()
     db.mark_workout_completed(user_id, today, day_of_week, False)
+    
+    # Возвращаемся к таблице дней
+    plans_list = db.get_all_workout_plans(user_id)
+    plans = {p['day_of_week']: p['exercises'] for p in plans_list}
+    
+    day_names_full = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    today_weekday = datetime.now().weekday()
+    
+    text = f"Тренировка на {day_names_full[day_of_week]} пропущена.\n\nПлан тренировок на неделю:\n\n"
+    for i, name in enumerate(day_names_full):
+        marker = "[+]" if i in plans and plans[i] else "[-]"
+        today_marker = " <- сегодня" if i == today_weekday else ""
+        text += f"{marker} {name}{today_marker}\n"
+    
+    text += "\nВыбери день для просмотра или редактирования:"
+    keyboard = get_workout_days_keyboard(user_id, plans)
+    
     try:
-        await callback.message.edit_text("Тренировка отмечена как пропущенная.")
+        import os
+        if os.path.exists("images/workout.png"):
+            photo = FSInputFile("images/workout.png")
+        else:
+            photo = FSInputFile("images/workout.jpg")
+        
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        await callback.message.answer_photo(photo=photo, caption=text, reply_markup=keyboard)
     except:
-        await callback.message.answer("Тренировка отмечена как пропущенная.")
+        try:
+            await callback.message.edit_text(text, reply_markup=keyboard)
+        except:
+            await callback.message.answer(text, reply_markup=keyboard)
 
 
 @dp.callback_query(F.data == "workout_analysis")

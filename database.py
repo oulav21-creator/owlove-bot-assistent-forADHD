@@ -812,7 +812,8 @@ class Database:
         
         return result[0] if result else None
     
-    def get_all_workout_plans(self, user_id: int) -> Dict[int, str]:
+    def get_all_workout_plans(self, user_id: int) -> list:
+        """Возвращает список планов в формате [{'day_of_week': int, 'exercises': str}, ...]"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -820,7 +821,21 @@ class Database:
         results = cursor.fetchall()
         conn.close()
         
-        return {row[0]: row[1] for row in results}
+        return [{'day_of_week': row[0], 'exercises': row[1]} for row in results]
+    
+    def delete_workout_plan(self, user_id: int, day_of_week: int) -> bool:
+        """Удалить план тренировки на конкретный день"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "DELETE FROM workout_plans WHERE user_id = ? AND day_of_week = ?",
+            (user_id, day_of_week)
+        )
+        
+        conn.commit()
+        conn.close()
+        return True
     
     def mark_workout_completed(self, user_id: int, date: str, day_of_week: int, completed: bool = True) -> bool:
         conn = sqlite3.connect(self.db_path)
