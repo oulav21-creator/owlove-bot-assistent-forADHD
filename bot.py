@@ -3236,7 +3236,9 @@ def main():
             app,
             host="0.0.0.0",
             port=port,
-            log_level="info"
+            log_level="info",
+            timeout_keep_alive=65,
+            loop="asyncio"
         )
     else:
         # Режим локальной разработки: используем polling
