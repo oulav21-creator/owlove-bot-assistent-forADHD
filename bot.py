@@ -2884,59 +2884,95 @@ async def setup_webhook():
         
         webhook_url = f"{app_url}/webhook"
     
-    # Пересоздаем объект бота с актуальным токеном из окружения
-    # Это гарантирует, что используется правильный токен
+    # ВСЕГДА пересоздаем объект бота с токеном из окружения
+    # Это гарантирует, что используется актуальный токен
     current_token_from_env = os.getenv("BOT_TOKEN", "").strip()
-    if current_token_from_env and current_token_from_env != bot.token:
-        print(f"DEBUG: Токен изменился, пересоздаем объект бота")
-        await bot.session.close()
-        bot = Bot(token=current_token_from_env)
+    if not current_token_from_env:
+        print("❌ BOT_TOKEN не найден в окружении!")
+        return
     
-    # Проверяем токен перед установкой webhook
-    current_token = bot.token
-    print(f"DEBUG: Токен бота при установке webhook: {current_token[:20]}... (длина: {len(current_token)})")
+    # Очищаем токен от всех невидимых символов
+    current_token_from_env = ''.join(char for char in current_token_from_env if char.isprintable())
+    current_token_from_env = current_token_from_env.strip()
+    
+    # Проверяем формат токена (должен быть число:строка)
+    if ':' not in current_token_from_env:
+        print(f"❌ Неверный формат токена! Токен должен быть в формате 'число:строка'")
+        return
+    
+    print(f"DEBUG: Пересоздаем объект бота с токеном из окружения")
+    print(f"DEBUG: Токен из окружения: {current_token_from_env[:20]}... (длина: {len(current_token_from_env)})")
+    print(f"DEBUG: Проверка токена через getMe...")
+    
+    # Проверяем токен через getMe перед установкой webhook
+    try:
+        check_url = f"https://api.telegram.org/bot{current_token_from_env}/getMe"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(check_url) as response:
+                check_result = await response.json()
+                if check_result.get("ok"):
+                    bot_info = check_result.get("result", {})
+                    print(f"DEBUG: Токен валиден! Бот: @{bot_info.get('username', 'unknown')}")
+                else:
+                    print(f"❌ Токен невалиден! Ответ API: {check_result}")
+                    raise Exception(f"Токен не прошел проверку: {check_result.get('description', 'Unknown error')}")
+    except Exception as check_error:
+        print(f"❌ Ошибка при проверке токена: {check_error}")
+        raise
+    
+    # Закрываем старую сессию, если есть
+    try:
+        await bot.session.close()
+    except:
+        pass
+    
+    # Создаем новый объект бота с токеном из окружения
+    temp_bot = Bot(token=current_token_from_env)
+    
     print(f"DEBUG: Webhook URL: {webhook_url}")
     
-    # Удаляем старый webhook (если есть)
+    # Удаляем старый webhook (если есть) используя новый объект бота
     try:
-        await bot.delete_webhook(drop_pending_updates=True)
+        await temp_bot.delete_webhook(drop_pending_updates=True)
         print("✓ Старый webhook удален")
     except Exception as e:
         print(f"⚠️  Ошибка при удалении старого webhook: {e}")
-        print(f"DEBUG: Тип ошибки: {type(e).__name__}")
+        # Не критично, продолжаем
+    
+    # Используем прямой API запрос как основной способ (более надежно)
+    print(f"DEBUG: Устанавливаем webhook через прямой API запрос...")
+    try:
+        api_url = f"https://api.telegram.org/bot{current_token_from_env}/setWebhook"
+        async with aiohttp.ClientSession() as session:
+            async with session.post(api_url, json={
+                "url": webhook_url,
+                "drop_pending_updates": True
+            }) as response:
+                result = await response.json()
+                if result.get("ok"):
+                    print(f"✓ Webhook установлен через API: {webhook_url}")
+                    # Обновляем глобальный объект bot
+                    bot = temp_bot
+                else:
+                    error_desc = result.get('description', 'Unknown error')
+                    print(f"❌ Ошибка при установке webhook через API: {error_desc}")
+                    print(f"DEBUG: Полный ответ API: {result}")
+                    # Пробуем через aiogram как fallback
+                    try:
+                        await temp_bot.set_webhook(
+                            url=webhook_url,
+                            drop_pending_updates=True
+                        )
+                        print(f"✓ Webhook установлен через aiogram (fallback): {webhook_url}")
+                        bot = temp_bot
+                    except Exception as aiogram_error:
+                        print(f"❌ Ошибка при установке webhook через aiogram: {aiogram_error}")
+                        raise Exception(f"Не удалось установить webhook: {error_desc}")
+    except Exception as api_error:
+        print(f"❌ Ошибка при установке webhook через API: {api_error}")
         import traceback
         traceback.print_exc()
-    
-    # Устанавливаем новый webhook
-    try:
-        await bot.set_webhook(
-            url=webhook_url,
-            drop_pending_updates=True
-        )
-        print(f"✓ Webhook установлен: {webhook_url}")
-    except Exception as e:
-        print(f"⚠️  Ошибка при установке webhook через aiogram: {e}")
-        print(f"DEBUG: Пробуем установить webhook напрямую через API...")
-        
-        # Fallback: устанавливаем webhook напрямую через Telegram API
-        try:
-            api_url = f"https://api.telegram.org/bot{current_token}/setWebhook"
-            async with aiohttp.ClientSession() as session:
-                async with session.post(api_url, json={
-                    "url": webhook_url,
-                    "drop_pending_updates": True
-                }) as response:
-                    result = await response.json()
-                    if result.get("ok"):
-                        print(f"✓ Webhook установлен напрямую через API: {webhook_url}")
-                    else:
-                        print(f"❌ Ошибка при установке webhook через API: {result}")
-                        raise Exception(f"API вернул ошибку: {result.get('description', 'Unknown error')}")
-        except Exception as api_error:
-            print(f"❌ Ошибка при установке webhook через API: {api_error}")
-            import traceback
-            traceback.print_exc()
-            raise
+        raise
 
 
 async def notification_scheduler():
