@@ -9,15 +9,17 @@ class Database:
     def __init__(self, db_path: str = "naparnik.db"):
         self.db_path = db_path
         self._init_db()
+        self._migrate_add_user_id()
     
     def _init_db(self):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Таблица сессий фокуса
+        # Таблица сессий фокуса (с поддержкой многопользовательности)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS focus_sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 0,
                 date TEXT NOT NULL,
                 direction TEXT NOT NULL,
                 duration INTEGER NOT NULL,
@@ -31,6 +33,7 @@ class Database:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS brain_dumps (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 0,
                 date TEXT NOT NULL,
                 content TEXT NOT NULL,
                 created_at TEXT NOT NULL
@@ -41,6 +44,7 @@ class Database:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS learning_notes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 0,
                 date TEXT NOT NULL,
                 note TEXT NOT NULL,
                 created_at TEXT NOT NULL
@@ -51,6 +55,7 @@ class Database:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS detailed_sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 0,
                 date TEXT NOT NULL,
                 domain TEXT NOT NULL,
                 task_type TEXT NOT NULL,
@@ -67,7 +72,8 @@ class Database:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS english_srs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                phrase_en TEXT NOT NULL UNIQUE,
+                user_id INTEGER NOT NULL DEFAULT 0,
+                phrase_en TEXT NOT NULL,
                 phrase_ru TEXT NOT NULL,
                 example TEXT,
                 interval_days INTEGER DEFAULT 1,
@@ -76,7 +82,8 @@ class Database:
                 success_count INTEGER DEFAULT 0,
                 fail_count INTEGER DEFAULT 0,
                 ease_factor REAL DEFAULT 2.5,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                UNIQUE(user_id, phrase_en)
             )
         """)
         
@@ -84,6 +91,7 @@ class Database:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS english_reviews (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 0,
                 phrase_id INTEGER NOT NULL,
                 user_answer TEXT,
                 is_correct INTEGER NOT NULL,
@@ -96,6 +104,7 @@ class Database:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS sleep_records (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 0,
                 date TEXT NOT NULL,
                 sleep_start TEXT NOT NULL,
                 sleep_end TEXT,
@@ -108,10 +117,12 @@ class Database:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS workout_plans (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                day_of_week INTEGER NOT NULL UNIQUE,
+                user_id INTEGER NOT NULL DEFAULT 0,
+                day_of_week INTEGER NOT NULL,
                 exercises TEXT NOT NULL,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                UNIQUE(user_id, day_of_week)
             )
         """)
         
@@ -119,6 +130,7 @@ class Database:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS workout_completions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 0,
                 date TEXT NOT NULL,
                 day_of_week INTEGER NOT NULL,
                 completed INTEGER NOT NULL DEFAULT 0,
@@ -126,7 +138,7 @@ class Database:
             )
         """)
         
-        # Таблица неправильных глаголов
+        # Таблица неправильных глаголов (общая для всех пользователей - справочник)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS irregular_verbs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -144,17 +156,18 @@ class Database:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS focus_tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 0,
                 task_name TEXT NOT NULL,
                 description TEXT,
                 created_at TEXT NOT NULL
             )
         """)
         
-        # Таблица для отслеживания первого использования и уведомлений
+        # Таблица для отслеживания первого использования и уведомлений (per-user)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_metadata (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                user_id INTEGER UNIQUE,
                 first_session_date TEXT,
                 last_heatmap_notification_date TEXT,
                 last_sleep_chart_notification_date TEXT,
@@ -162,16 +175,11 @@ class Database:
             )
         """)
         
-        # Добавляем колонку user_id, если её нет (для существующих БД)
-        try:
-            cursor.execute("ALTER TABLE user_metadata ADD COLUMN user_id INTEGER")
-        except sqlite3.OperationalError:
-            pass  # Колонка уже существует
-        
         # Таблица для изучения слов с SRS
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS vocabulary_words (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 0,
                 word TEXT NOT NULL,
                 explanation TEXT NOT NULL,
                 translation TEXT NOT NULL,
@@ -192,11 +200,54 @@ class Database:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_workout_completions_date ON workout_completions(date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_workout_completions_day ON workout_completions(day_of_week)")
         
+        # Индексы для user_id (для быстрой фильтрации по пользователю)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_focus_sessions_user ON focus_sessions(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_brain_dumps_user ON brain_dumps(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_learning_notes_user ON learning_notes(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_detailed_sessions_user ON detailed_sessions(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_english_srs_user ON english_srs(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sleep_records_user ON sleep_records(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_workout_plans_user ON workout_plans(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_workout_completions_user ON workout_completions(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_focus_tasks_user ON focus_tasks(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_vocabulary_words_user ON vocabulary_words(user_id)")
+        
+        conn.commit()
+        conn.close()
+    
+    def _migrate_add_user_id(self):
+        """Миграция: добавление user_id в существующие таблицы для многопользовательской поддержки"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Список таблиц, которым нужен user_id
+        tables_to_migrate = [
+            'focus_sessions',
+            'brain_dumps', 
+            'learning_notes',
+            'detailed_sessions',
+            'english_srs',
+            'english_reviews',
+            'sleep_records',
+            'workout_plans',
+            'workout_completions',
+            'focus_tasks',
+            'vocabulary_words'
+        ]
+        
+        for table in tables_to_migrate:
+            try:
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0")
+                print(f"Миграция: добавлен user_id в таблицу {table}")
+            except sqlite3.OperationalError:
+                pass  # Колонка уже существует
+        
         conn.commit()
         conn.close()
     
     def add_focus_session(
         self,
+        user_id: int,
         direction: str,
         duration: int,
         focus_status: str,
@@ -209,8 +260,8 @@ class Database:
         now = datetime.now().isoformat()
         
         cursor.execute(
-            "INSERT INTO focus_sessions (date, direction, duration, focus_status, description, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (today, direction, duration, focus_status, description, now)
+            "INSERT INTO focus_sessions (user_id, date, direction, duration, focus_status, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user_id, today, direction, duration, focus_status, description, now)
         )
         
         session_id = cursor.lastrowid
@@ -219,7 +270,7 @@ class Database:
         
         return session_id
     
-    def get_today_sessions(self) -> List[Dict[str, Any]]:
+    def get_today_sessions(self, user_id: int) -> List[Dict[str, Any]]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -227,8 +278,8 @@ class Database:
         today = datetime.now().strftime("%Y-%m-%d")
         
         cursor.execute(
-            "SELECT * FROM focus_sessions WHERE date = ? ORDER BY created_at DESC",
-            (today,)
+            "SELECT * FROM focus_sessions WHERE user_id = ? AND date = ? ORDER BY created_at DESC",
+            (user_id, today)
         )
         
         sessions = [dict(row) for row in cursor.fetchall()]
@@ -236,7 +287,7 @@ class Database:
         
         return sessions
     
-    def add_brain_dump(self, content: str) -> int:
+    def add_brain_dump(self, user_id: int, content: str) -> int:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -244,8 +295,8 @@ class Database:
         now = datetime.now().isoformat()
         
         cursor.execute(
-            "INSERT INTO brain_dumps (date, content, created_at) VALUES (?, ?, ?)",
-            (today, content, now)
+            "INSERT INTO brain_dumps (user_id, date, content, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, today, content, now)
         )
         
         dump_id = cursor.lastrowid
@@ -254,7 +305,7 @@ class Database:
         
         return dump_id
     
-    def add_learning_note(self, note: str) -> int:
+    def add_learning_note(self, user_id: int, note: str) -> int:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -262,8 +313,8 @@ class Database:
         now = datetime.now().isoformat()
         
         cursor.execute(
-            "INSERT INTO learning_notes (date, note, created_at) VALUES (?, ?, ?)",
-            (today, note, now)
+            "INSERT INTO learning_notes (user_id, date, note, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, today, note, now)
         )
         
         note_id = cursor.lastrowid
@@ -272,14 +323,14 @@ class Database:
         
         return note_id
     
-    def get_all_brain_dumps(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def get_all_brain_dumps(self, user_id: int, limit: int = 50) -> List[Dict[str, Any]]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT * FROM brain_dumps ORDER BY created_at DESC LIMIT ?",
-            (limit,)
+            "SELECT * FROM brain_dumps WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+            (user_id, limit)
         )
         
         dumps = [dict(row) for row in cursor.fetchall()]
@@ -287,14 +338,14 @@ class Database:
         
         return dumps
     
-    def get_brain_dump_by_id(self, dump_id: int) -> Optional[Dict[str, Any]]:
+    def get_brain_dump_by_id(self, user_id: int, dump_id: int) -> Optional[Dict[str, Any]]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT * FROM brain_dumps WHERE id = ?",
-            (dump_id,)
+            "SELECT * FROM brain_dumps WHERE user_id = ? AND id = ?",
+            (user_id, dump_id)
         )
         
         result = cursor.fetchone()
@@ -302,13 +353,13 @@ class Database:
         
         return dict(result) if result else None
     
-    def update_brain_dump(self, dump_id: int, content: str) -> bool:
+    def update_brain_dump(self, user_id: int, dump_id: int, content: str) -> bool:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         cursor.execute(
-            "UPDATE brain_dumps SET content = ? WHERE id = ?",
-            (content, dump_id)
+            "UPDATE brain_dumps SET content = ? WHERE user_id = ? AND id = ?",
+            (content, user_id, dump_id)
         )
         
         success = cursor.rowcount > 0
@@ -317,13 +368,13 @@ class Database:
         
         return success
     
-    def delete_brain_dump(self, dump_id: int) -> bool:
+    def delete_brain_dump(self, user_id: int, dump_id: int) -> bool:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         cursor.execute(
-            "DELETE FROM brain_dumps WHERE id = ?",
-            (dump_id,)
+            "DELETE FROM brain_dumps WHERE user_id = ? AND id = ?",
+            (user_id, dump_id)
         )
         
         success = cursor.rowcount > 0
@@ -332,14 +383,14 @@ class Database:
         
         return success
     
-    def get_all_learning_notes(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def get_all_learning_notes(self, user_id: int, limit: int = 50) -> List[Dict[str, Any]]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT * FROM learning_notes ORDER BY created_at DESC LIMIT ?",
-            (limit,)
+            "SELECT * FROM learning_notes WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+            (user_id, limit)
         )
         
         notes = [dict(row) for row in cursor.fetchall()]
@@ -347,14 +398,14 @@ class Database:
         
         return notes
     
-    def get_learning_note_by_id(self, note_id: int) -> Optional[Dict[str, Any]]:
+    def get_learning_note_by_id(self, user_id: int, note_id: int) -> Optional[Dict[str, Any]]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT * FROM learning_notes WHERE id = ?",
-            (note_id,)
+            "SELECT * FROM learning_notes WHERE user_id = ? AND id = ?",
+            (user_id, note_id)
         )
         
         result = cursor.fetchone()
@@ -362,13 +413,13 @@ class Database:
         
         return dict(result) if result else None
     
-    def update_learning_note(self, note_id: int, note: str) -> bool:
+    def update_learning_note(self, user_id: int, note_id: int, note: str) -> bool:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         cursor.execute(
-            "UPDATE learning_notes SET note = ? WHERE id = ?",
-            (note, note_id)
+            "UPDATE learning_notes SET note = ? WHERE user_id = ? AND id = ?",
+            (note, user_id, note_id)
         )
         
         success = cursor.rowcount > 0
@@ -377,13 +428,13 @@ class Database:
         
         return success
     
-    def delete_learning_note(self, note_id: int) -> bool:
+    def delete_learning_note(self, user_id: int, note_id: int) -> bool:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         cursor.execute(
-            "DELETE FROM learning_notes WHERE id = ?",
-            (note_id,)
+            "DELETE FROM learning_notes WHERE user_id = ? AND id = ?",
+            (user_id, note_id)
         )
         
         success = cursor.rowcount > 0
@@ -396,6 +447,7 @@ class Database:
     
     def add_detailed_session(
         self,
+        user_id: int,
         domain: str,
         task_type: str,
         planned_minutes: int,
@@ -411,8 +463,8 @@ class Database:
         now = datetime.now().isoformat()
         
         cursor.execute(
-            "INSERT INTO detailed_sessions (date, domain, task_type, planned_minutes, actual_minutes, status, focus_status, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (today, domain, task_type, planned_minutes, actual_minutes, status, focus_status, description, now)
+            "INSERT INTO detailed_sessions (user_id, date, domain, task_type, planned_minutes, actual_minutes, status, focus_status, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, today, domain, task_type, planned_minutes, actual_minutes, status, focus_status, description, now)
         )
         
         session_id = cursor.lastrowid
@@ -423,6 +475,7 @@ class Database:
     
     def get_detailed_sessions(
         self,
+        user_id: int,
         domain: Optional[str] = None,
         task_type: Optional[str] = None,
         days: int = 30
@@ -431,8 +484,8 @@ class Database:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
-        query = "SELECT * FROM detailed_sessions WHERE date >= date('now', '-' || ? || ' days')"
-        params = [days]
+        query = "SELECT * FROM detailed_sessions WHERE user_id = ? AND date >= date('now', '-' || ? || ' days')"
+        params = [user_id, days]
         
         if domain:
             query += " AND domain = ?"
@@ -449,13 +502,13 @@ class Database:
         
         return sessions
     
-    def get_average_focus_duration(self, domain: str, task_type: str) -> Optional[float]:
+    def get_average_focus_duration(self, user_id: int, domain: str, task_type: str) -> Optional[float]:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT AVG(actual_minutes) FROM detailed_sessions WHERE domain = ? AND task_type = ? AND status = 'completed' AND actual_minutes IS NOT NULL",
-            (domain, task_type)
+            "SELECT AVG(actual_minutes) FROM detailed_sessions WHERE user_id = ? AND domain = ? AND task_type = ? AND status = 'completed' AND actual_minutes IS NOT NULL",
+            (user_id, domain, task_type)
         )
         
         result = cursor.fetchone()
@@ -467,6 +520,7 @@ class Database:
     
     def add_english_phrase(
         self,
+        user_id: int,
         phrase_en: str,
         phrase_ru: str,
         example: Optional[str] = None
@@ -479,19 +533,19 @@ class Database:
         
         try:
             cursor.execute(
-                "INSERT INTO english_srs (phrase_en, phrase_ru, example, next_review, created_at) VALUES (?, ?, ?, ?, ?)",
-                (phrase_en, phrase_ru, example, next_review, now)
+                "INSERT INTO english_srs (user_id, phrase_en, phrase_ru, example, next_review, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, phrase_en, phrase_ru, example, next_review, now)
             )
             phrase_id = cursor.lastrowid
             conn.commit()
             conn.close()
             return phrase_id
         except sqlite3.IntegrityError:
-            # Фраза уже существует
+            # Фраза уже существует для этого пользователя
             conn.close()
             return 0
     
-    def get_phrase_for_review(self) -> Optional[Dict[str, Any]]:
+    def get_phrase_for_review(self, user_id: int) -> Optional[Dict[str, Any]]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -499,8 +553,8 @@ class Database:
         now = datetime.now().isoformat()
         
         cursor.execute(
-            "SELECT * FROM english_srs WHERE next_review <= ? ORDER BY next_review ASC LIMIT 1",
-            (now,)
+            "SELECT * FROM english_srs WHERE user_id = ? AND next_review <= ? ORDER BY next_review ASC LIMIT 1",
+            (user_id, now)
         )
         
         result = cursor.fetchone()
@@ -510,6 +564,7 @@ class Database:
     
     def update_phrase_review(
         self,
+        user_id: int,
         phrase_id: int,
         is_correct: bool,
         user_answer: Optional[str] = None
@@ -520,11 +575,9 @@ class Database:
         now = datetime.now().isoformat()
         
         # Получаем текущие данные фразы
-        # Структура: id, phrase_en, phrase_ru, example, interval_days, last_reviewed, 
-        #           next_review, success_count, fail_count, ease_factor, created_at
         cursor.execute(
-            "SELECT interval_days, success_count, fail_count, ease_factor FROM english_srs WHERE id = ?",
-            (phrase_id,)
+            "SELECT interval_days, success_count, fail_count, ease_factor FROM english_srs WHERE user_id = ? AND id = ?",
+            (user_id, phrase_id)
         )
         result = cursor.fetchone()
         
@@ -554,24 +607,24 @@ class Database:
         
         # Обновляем фразу
         cursor.execute(
-            "UPDATE english_srs SET interval_days = ?, last_reviewed = ?, next_review = ?, success_count = ?, fail_count = ?, ease_factor = ? WHERE id = ?",
-            (interval_days, now, next_review, success_count, fail_count, ease_factor, phrase_id)
+            "UPDATE english_srs SET interval_days = ?, last_reviewed = ?, next_review = ?, success_count = ?, fail_count = ?, ease_factor = ? WHERE user_id = ? AND id = ?",
+            (interval_days, now, next_review, success_count, fail_count, ease_factor, user_id, phrase_id)
         )
         
         cursor.execute(
-            "INSERT INTO english_reviews (phrase_id, user_answer, is_correct, reviewed_at) VALUES (?, ?, ?, ?)",
-            (phrase_id, user_answer, 1 if is_correct else 0, now)
+            "INSERT INTO english_reviews (user_id, phrase_id, user_answer, is_correct, reviewed_at) VALUES (?, ?, ?, ?, ?)",
+            (user_id, phrase_id, user_answer, 1 if is_correct else 0, now)
         )
         
         conn.commit()
         conn.close()
     
-    def get_all_english_phrases(self) -> List[Dict[str, Any]]:
+    def get_all_english_phrases(self, user_id: int) -> List[Dict[str, Any]]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
-        cursor.execute("SELECT * FROM english_srs ORDER BY phrase_en")
+        cursor.execute("SELECT * FROM english_srs WHERE user_id = ? ORDER BY phrase_en", (user_id,))
         phrases = [dict(row) for row in cursor.fetchall()]
         conn.close()
         
@@ -579,7 +632,7 @@ class Database:
     
     # ========== Трекинг сна (v1.1) ==========
     
-    def add_sleep_start(self, sleep_start_time: Optional[datetime] = None) -> int:
+    def add_sleep_start(self, user_id: int, sleep_start_time: Optional[datetime] = None) -> int:
         """Добавляет запись начала сна. Если sleep_start_time не указан, используется текущее время."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -592,8 +645,8 @@ class Database:
         sleep_start_iso = sleep_start_time.isoformat()
         
         cursor.execute(
-            "INSERT INTO sleep_records (date, sleep_start, created_at) VALUES (?, ?, ?)",
-            (today, sleep_start_iso, now)
+            "INSERT INTO sleep_records (user_id, date, sleep_start, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, today, sleep_start_iso, now)
         )
         
         record_id = cursor.lastrowid
@@ -602,14 +655,14 @@ class Database:
         
         return record_id
     
-    def complete_sleep(self, record_id: int) -> Optional[int]:
+    def complete_sleep(self, user_id: int, record_id: int) -> Optional[int]:
         """Завершает запись сна. Возвращает длительность в минутах или None при ошибке."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         now = datetime.now().isoformat()
         
-        cursor.execute("SELECT sleep_start FROM sleep_records WHERE id = ?", (record_id,))
+        cursor.execute("SELECT sleep_start FROM sleep_records WHERE user_id = ? AND id = ?", (user_id, record_id))
         result = cursor.fetchone()
         
         if not result:
@@ -621,8 +674,8 @@ class Database:
         duration = int((sleep_end - sleep_start).total_seconds() / 60)
         
         cursor.execute(
-            "UPDATE sleep_records SET sleep_end = ?, duration_minutes = ? WHERE id = ?",
-            (now, duration, record_id)
+            "UPDATE sleep_records SET sleep_end = ?, duration_minutes = ? WHERE user_id = ? AND id = ?",
+            (now, duration, user_id, record_id)
         )
         
         conn.commit()
@@ -630,14 +683,14 @@ class Database:
         
         return duration
     
-    def get_sleep_records(self, days: int = 30) -> List[Dict[str, Any]]:
+    def get_sleep_records(self, user_id: int, days: int = 30) -> List[Dict[str, Any]]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT * FROM sleep_records WHERE date >= date('now', '-' || ? || ' days') ORDER BY created_at DESC",
-            (days,)
+            "SELECT * FROM sleep_records WHERE user_id = ? AND date >= date('now', '-' || ? || ' days') ORDER BY created_at DESC",
+            (user_id, days)
         )
         
         records = [dict(row) for row in cursor.fetchall()]
@@ -645,13 +698,13 @@ class Database:
         
         return records
     
-    def get_average_sleep(self, days: int = 7) -> Optional[float]:
+    def get_average_sleep(self, user_id: int, days: int = 7) -> Optional[float]:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT AVG(duration_minutes) FROM sleep_records WHERE date >= date('now', '-' || ? || ' days') AND duration_minutes IS NOT NULL",
-            (days,)
+            "SELECT AVG(duration_minutes) FROM sleep_records WHERE user_id = ? AND date >= date('now', '-' || ? || ' days') AND duration_minutes IS NOT NULL",
+            (user_id, days)
         )
         
         result = cursor.fetchone()
@@ -659,13 +712,14 @@ class Database:
         
         return result[0] if result and result[0] else None
     
-    def get_latest_sleep_record(self) -> Optional[Dict[str, Any]]:
+    def get_latest_sleep_record(self, user_id: int) -> Optional[Dict[str, Any]]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT * FROM sleep_records WHERE sleep_end IS NULL ORDER BY created_at DESC LIMIT 1"
+            "SELECT * FROM sleep_records WHERE user_id = ? AND sleep_end IS NULL ORDER BY created_at DESC LIMIT 1",
+            (user_id,)
         )
         
         result = cursor.fetchone()
@@ -673,31 +727,32 @@ class Database:
         
         return dict(result) if result else None
     
-    def has_completed_sleep_today(self) -> bool:
+    def has_completed_sleep_today(self, user_id: int) -> bool:
         """Есть ли сегодня хотя бы одна завершённая запись сна."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         today = datetime.now().strftime("%Y-%m-%d")
         cursor.execute(
-            "SELECT 1 FROM sleep_records WHERE date = ? AND sleep_end IS NOT NULL LIMIT 1",
-            (today,)
+            "SELECT 1 FROM sleep_records WHERE user_id = ? AND date = ? AND sleep_end IS NOT NULL LIMIT 1",
+            (user_id, today)
         )
         result = cursor.fetchone()
         conn.close()
         return result is not None
     
-    def delete_latest_sleep_record(self) -> bool:
+    def delete_latest_sleep_record(self, user_id: int) -> bool:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT id FROM sleep_records WHERE sleep_end IS NULL ORDER BY created_at DESC LIMIT 1"
+            "SELECT id FROM sleep_records WHERE user_id = ? AND sleep_end IS NULL ORDER BY created_at DESC LIMIT 1",
+            (user_id,)
         )
         result = cursor.fetchone()
         
         if result:
             record_id = result[0]
-            cursor.execute("DELETE FROM sleep_records WHERE id = ?", (record_id,))
+            cursor.execute("DELETE FROM sleep_records WHERE user_id = ? AND id = ?", (user_id, record_id))
             conn.commit()
             conn.close()
             return True
@@ -705,13 +760,13 @@ class Database:
         conn.close()
         return False
     
-    def delete_all_sleep_records(self) -> bool:
-        """Удаляет все записи о сне."""
+    def delete_all_sleep_records(self, user_id: int) -> bool:
+        """Удаляет все записи о сне для пользователя."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         try:
-            cursor.execute("DELETE FROM sleep_records")
+            cursor.execute("DELETE FROM sleep_records WHERE user_id = ?", (user_id,))
             conn.commit()
             conn.close()
             return True
@@ -720,62 +775,88 @@ class Database:
             return False
 
     # Методы для тренировок
-    def set_workout_plan(self, day_of_week: int, exercises: str) -> bool:
+    def set_workout_plan(self, user_id: int, day_of_week: int, exercises: str) -> bool:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         now = datetime.now().isoformat()
         
+        # Проверяем, существует ли уже план для этого пользователя и дня
         cursor.execute(
-            "INSERT OR REPLACE INTO workout_plans (day_of_week, exercises, created_at, updated_at) VALUES (?, ?, COALESCE((SELECT created_at FROM workout_plans WHERE day_of_week = ?), ?), ?)",
-            (day_of_week, exercises, day_of_week, now, now)
+            "SELECT id, created_at FROM workout_plans WHERE user_id = ? AND day_of_week = ?",
+            (user_id, day_of_week)
         )
+        existing = cursor.fetchone()
+        
+        if existing:
+            cursor.execute(
+                "UPDATE workout_plans SET exercises = ?, updated_at = ? WHERE user_id = ? AND day_of_week = ?",
+                (exercises, now, user_id, day_of_week)
+            )
+        else:
+            cursor.execute(
+                "INSERT INTO workout_plans (user_id, day_of_week, exercises, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (user_id, day_of_week, exercises, now, now)
+            )
         
         conn.commit()
         conn.close()
         return True
     
-    def get_workout_plan(self, day_of_week: int) -> Optional[str]:
+    def get_workout_plan(self, user_id: int, day_of_week: int) -> Optional[str]:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        cursor.execute("SELECT exercises FROM workout_plans WHERE day_of_week = ?", (day_of_week,))
+        cursor.execute("SELECT exercises FROM workout_plans WHERE user_id = ? AND day_of_week = ?", (user_id, day_of_week))
         result = cursor.fetchone()
         conn.close()
         
         return result[0] if result else None
     
-    def get_all_workout_plans(self) -> Dict[int, str]:
+    def get_all_workout_plans(self, user_id: int) -> Dict[int, str]:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        cursor.execute("SELECT day_of_week, exercises FROM workout_plans")
+        cursor.execute("SELECT day_of_week, exercises FROM workout_plans WHERE user_id = ?", (user_id,))
         results = cursor.fetchall()
         conn.close()
         
         return {row[0]: row[1] for row in results}
     
-    def mark_workout_completed(self, date: str, day_of_week: int, completed: bool = True) -> bool:
+    def mark_workout_completed(self, user_id: int, date: str, day_of_week: int, completed: bool = True) -> bool:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         now = datetime.now().isoformat()
         
+        # Проверяем, существует ли уже запись
         cursor.execute(
-            "INSERT OR REPLACE INTO workout_completions (date, day_of_week, completed, created_at) VALUES (?, ?, ?, ?)",
-            (date, day_of_week, 1 if completed else 0, now)
+            "SELECT id FROM workout_completions WHERE user_id = ? AND date = ? AND day_of_week = ?",
+            (user_id, date, day_of_week)
         )
+        existing = cursor.fetchone()
+        
+        if existing:
+            cursor.execute(
+                "UPDATE workout_completions SET completed = ? WHERE user_id = ? AND date = ? AND day_of_week = ?",
+                (1 if completed else 0, user_id, date, day_of_week)
+            )
+        else:
+            cursor.execute(
+                "INSERT INTO workout_completions (user_id, date, day_of_week, completed, created_at) VALUES (?, ?, ?, ?, ?)",
+                (user_id, date, day_of_week, 1 if completed else 0, now)
+            )
         
         conn.commit()
         conn.close()
         return True
     
-    def get_workout_completions(self, days: int = 14) -> List[Dict[str, Any]]:
+    def get_workout_completions(self, user_id: int, days: int = 14) -> List[Dict[str, Any]]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT * FROM workout_completions WHERE date >= date('now', '-' || ? || ' days') ORDER BY date DESC",
-            (days,)
+            "SELECT * FROM workout_completions WHERE user_id = ? AND date >= date('now', '-' || ? || ' days') ORDER BY date DESC",
+            (user_id, days)
         )
         
         records = [dict(row) for row in cursor.fetchall()]
@@ -832,14 +913,14 @@ class Database:
         return dict(result) if result else None
     
     # Методы для задач сессий фокуса
-    def add_focus_task(self, task_name: str, description: Optional[str] = None) -> int:
+    def add_focus_task(self, user_id: int, task_name: str, description: Optional[str] = None) -> int:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         now = datetime.now().isoformat()
         
         cursor.execute(
-            "INSERT INTO focus_tasks (task_name, description, created_at) VALUES (?, ?, ?)",
-            (task_name, description, now)
+            "INSERT INTO focus_tasks (user_id, task_name, description, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, task_name, description, now)
         )
         
         task_id = cursor.lastrowid
@@ -847,34 +928,34 @@ class Database:
         conn.close()
         return task_id
     
-    def get_all_focus_tasks(self) -> List[Dict[str, Any]]:
+    def get_all_focus_tasks(self, user_id: int) -> List[Dict[str, Any]]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
-        cursor.execute("SELECT * FROM focus_tasks ORDER BY created_at DESC")
+        cursor.execute("SELECT * FROM focus_tasks WHERE user_id = ? ORDER BY created_at DESC", (user_id,))
         tasks = [dict(row) for row in cursor.fetchall()]
         conn.close()
         return tasks
     
-    def get_focus_task_by_id(self, task_id: int) -> Optional[Dict[str, Any]]:
+    def get_focus_task_by_id(self, user_id: int, task_id: int) -> Optional[Dict[str, Any]]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
-        cursor.execute("SELECT * FROM focus_tasks WHERE id = ?", (task_id,))
+        cursor.execute("SELECT * FROM focus_tasks WHERE user_id = ? AND id = ?", (user_id, task_id))
         result = cursor.fetchone()
         conn.close()
         
         return dict(result) if result else None
     
-    def update_focus_task(self, task_id: int, task_name: str, description: Optional[str] = None) -> bool:
+    def update_focus_task(self, user_id: int, task_id: int, task_name: str, description: Optional[str] = None) -> bool:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         cursor.execute(
-            "UPDATE focus_tasks SET task_name = ?, description = ? WHERE id = ?",
-            (task_name, description, task_id)
+            "UPDATE focus_tasks SET task_name = ?, description = ? WHERE user_id = ? AND id = ?",
+            (task_name, description, user_id, task_id)
         )
         
         success = cursor.rowcount > 0
@@ -882,26 +963,26 @@ class Database:
         conn.close()
         return success
     
-    def delete_focus_task(self, task_id: int) -> bool:
+    def delete_focus_task(self, user_id: int, task_id: int) -> bool:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        cursor.execute("DELETE FROM focus_tasks WHERE id = ?", (task_id,))
+        cursor.execute("DELETE FROM focus_tasks WHERE user_id = ? AND id = ?", (user_id, task_id))
         
         success = cursor.rowcount > 0
         conn.commit()
         conn.close()
         return success
     
-    # Методы для отслеживания первого использования и уведомлений
-    def set_first_session_date(self, user_id: Optional[int] = None) -> bool:
+    # Методы для отслеживания первого использования и уведомлений (per-user)
+    def set_first_session_date(self, user_id: int) -> bool:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         now = datetime.now().isoformat()
         today = datetime.now().strftime("%Y-%m-%d")
         
-        # Проверяем, есть ли уже запись
-        cursor.execute("SELECT id FROM user_metadata LIMIT 1")
+        # Проверяем, есть ли уже запись для этого пользователя
+        cursor.execute("SELECT id, first_session_date FROM user_metadata WHERE user_id = ?", (user_id,))
         exists = cursor.fetchone()
         
         if not exists:
@@ -909,9 +990,9 @@ class Database:
                 "INSERT INTO user_metadata (user_id, first_session_date, created_at) VALUES (?, ?, ?)",
                 (user_id, today, now)
             )
-        else:
+        elif not exists[1]:  # first_session_date is NULL
             cursor.execute(
-                "UPDATE user_metadata SET first_session_date = COALESCE(first_session_date, ?), user_id = COALESCE(user_id, ?) WHERE id = 1",
+                "UPDATE user_metadata SET first_session_date = ? WHERE user_id = ?",
                 (today, user_id)
             )
         
@@ -919,28 +1000,18 @@ class Database:
         conn.close()
         return True
     
-    def get_user_id(self) -> Optional[int]:
+    def get_first_session_date(self, user_id: int) -> Optional[str]:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        cursor.execute("SELECT user_id FROM user_metadata LIMIT 1")
-        result = cursor.fetchone()
-        conn.close()
-        
-        return int(result[0]) if result and result[0] else None
-    
-    def get_first_session_date(self) -> Optional[str]:
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT first_session_date FROM user_metadata LIMIT 1")
+        cursor.execute("SELECT first_session_date FROM user_metadata WHERE user_id = ?", (user_id,))
         result = cursor.fetchone()
         conn.close()
         
         return result[0] if result and result[0] else None
     
-    def get_days_since_first_session(self) -> Optional[int]:
-        first_date = self.get_first_session_date()
+    def get_days_since_first_session(self, user_id: int) -> Optional[int]:
+        first_date = self.get_first_session_date(user_id)
         if not first_date:
             return None
         
@@ -952,84 +1023,95 @@ class Database:
         except:
             return None
     
-    def mark_heatmap_notification_sent(self) -> bool:
+    def mark_heatmap_notification_sent(self, user_id: int) -> bool:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         today = datetime.now().strftime("%Y-%m-%d")
+        now = datetime.now().isoformat()
         
-        cursor.execute("SELECT id FROM user_metadata LIMIT 1")
+        cursor.execute("SELECT id FROM user_metadata WHERE user_id = ?", (user_id,))
         exists = cursor.fetchone()
         
         if not exists:
-            now = datetime.now().isoformat()
             cursor.execute(
-                "INSERT INTO user_metadata (last_heatmap_notification_date, created_at) VALUES (?, ?)",
-                (today, now)
+                "INSERT INTO user_metadata (user_id, last_heatmap_notification_date, created_at) VALUES (?, ?, ?)",
+                (user_id, today, now)
             )
         else:
             cursor.execute(
-                "UPDATE user_metadata SET last_heatmap_notification_date = ? WHERE id = 1",
-                (today,)
+                "UPDATE user_metadata SET last_heatmap_notification_date = ? WHERE user_id = ?",
+                (today, user_id)
             )
         
         conn.commit()
         conn.close()
         return True
     
-    def get_last_heatmap_notification_date(self) -> Optional[str]:
+    def get_last_heatmap_notification_date(self, user_id: int) -> Optional[str]:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        cursor.execute("SELECT last_heatmap_notification_date FROM user_metadata LIMIT 1")
+        cursor.execute("SELECT last_heatmap_notification_date FROM user_metadata WHERE user_id = ?", (user_id,))
         result = cursor.fetchone()
         conn.close()
         
         return result[0] if result and result[0] else None
     
-    def mark_sleep_chart_notification_sent(self) -> bool:
+    def mark_sleep_chart_notification_sent(self, user_id: int) -> bool:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         today = datetime.now().strftime("%Y-%m-%d")
+        now = datetime.now().isoformat()
         
-        cursor.execute("SELECT id FROM user_metadata LIMIT 1")
+        cursor.execute("SELECT id FROM user_metadata WHERE user_id = ?", (user_id,))
         exists = cursor.fetchone()
         
         if not exists:
-            now = datetime.now().isoformat()
             cursor.execute(
-                "INSERT INTO user_metadata (last_sleep_chart_notification_date, created_at) VALUES (?, ?)",
-                (today, now)
+                "INSERT INTO user_metadata (user_id, last_sleep_chart_notification_date, created_at) VALUES (?, ?, ?)",
+                (user_id, today, now)
             )
         else:
             cursor.execute(
-                "UPDATE user_metadata SET last_sleep_chart_notification_date = ? WHERE id = 1",
-                (today,)
+                "UPDATE user_metadata SET last_sleep_chart_notification_date = ? WHERE user_id = ?",
+                (today, user_id)
             )
         
         conn.commit()
         conn.close()
         return True
     
-    def get_last_sleep_chart_notification_date(self) -> Optional[str]:
+    def get_last_sleep_chart_notification_date(self, user_id: int) -> Optional[str]:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        cursor.execute("SELECT last_sleep_chart_notification_date FROM user_metadata LIMIT 1")
+        cursor.execute("SELECT last_sleep_chart_notification_date FROM user_metadata WHERE user_id = ?", (user_id,))
         result = cursor.fetchone()
         conn.close()
         
         return result[0] if result and result[0] else None
+    
+    def get_all_users(self) -> List[int]:
+        """Получает список всех user_id из user_metadata"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT DISTINCT user_id FROM user_metadata WHERE user_id IS NOT NULL")
+        results = cursor.fetchall()
+        conn.close()
+        
+        return [row[0] for row in results]
     
     # Методы для изучения слов с SRS
-    def add_vocabulary_word(self, word: str, explanation: str, translation: str) -> int:
+    def add_vocabulary_word(self, user_id: int, word: str, explanation: str, translation: str) -> int:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         now = datetime.now().isoformat()
         today = datetime.now().strftime("%Y-%m-%d")
         
         cursor.execute(
-            "INSERT INTO vocabulary_words (word, explanation, translation, next_review_date, created_at) VALUES (?, ?, ?, ?, ?)",
-            (word, explanation, translation, today, now)
+            "INSERT INTO vocabulary_words (user_id, word, explanation, translation, next_review_date, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, word, explanation, translation, today, now)
         )
         
         word_id = cursor.lastrowid
@@ -1037,29 +1119,29 @@ class Database:
         conn.close()
         return word_id
     
-    def get_all_vocabulary_words(self) -> List[Dict[str, Any]]:
+    def get_all_vocabulary_words(self, user_id: int) -> List[Dict[str, Any]]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
-        cursor.execute("SELECT * FROM vocabulary_words ORDER BY created_at DESC")
+        cursor.execute("SELECT * FROM vocabulary_words WHERE user_id = ? ORDER BY created_at DESC", (user_id,))
         rows = cursor.fetchall()
         conn.close()
         
         return [dict(row) for row in rows]
     
-    def get_vocabulary_word_by_id(self, word_id: int) -> Optional[Dict[str, Any]]:
+    def get_vocabulary_word_by_id(self, user_id: int, word_id: int) -> Optional[Dict[str, Any]]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
-        cursor.execute("SELECT * FROM vocabulary_words WHERE id = ?", (word_id,))
+        cursor.execute("SELECT * FROM vocabulary_words WHERE user_id = ? AND id = ?", (user_id, word_id))
         row = cursor.fetchone()
         conn.close()
         
         return dict(row) if row else None
     
-    def get_words_for_review(self) -> List[Dict[str, Any]]:
+    def get_words_for_review(self, user_id: int) -> List[Dict[str, Any]]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -1068,8 +1150,8 @@ class Database:
         # Получаем слова, которые нужно повторить сегодня или ранее
         # Приоритет: слова с ошибками (низкий ease_factor) показываем чаще
         cursor.execute(
-            "SELECT * FROM vocabulary_words WHERE next_review_date <= ? OR next_review_date IS NULL ORDER BY CASE WHEN repetitions = 0 THEN 1 WHEN ease_factor < 2.0 THEN 2 ELSE 3 END, next_review_date ASC",
-            (today,)
+            "SELECT * FROM vocabulary_words WHERE user_id = ? AND (next_review_date <= ? OR next_review_date IS NULL) ORDER BY CASE WHEN repetitions = 0 THEN 1 WHEN ease_factor < 2.0 THEN 2 ELSE 3 END, next_review_date ASC",
+            (user_id, today)
         )
         
         rows = cursor.fetchall()
@@ -1077,14 +1159,14 @@ class Database:
         
         return [dict(row) for row in rows]
     
-    def update_word_review(self, word_id: int, success: bool) -> bool:
+    def update_word_review(self, user_id: int, word_id: int, success: bool) -> bool:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         now = datetime.now().isoformat()
         today = datetime.now()
         
         # Получаем текущие данные слова
-        word_data = self.get_vocabulary_word_by_id(word_id)
+        word_data = self.get_vocabulary_word_by_id(user_id, word_id)
         if not word_data:
             conn.close()
             return False
@@ -1113,31 +1195,31 @@ class Database:
         next_review = (today + timedelta(days=interval_days)).strftime("%Y-%m-%d")
         
         cursor.execute(
-            "UPDATE vocabulary_words SET ease_factor = ?, interval_days = ?, repetitions = ?, next_review_date = ?, last_review_date = ? WHERE id = ?",
-            (ease_factor, interval_days, repetitions, next_review, now, word_id)
+            "UPDATE vocabulary_words SET ease_factor = ?, interval_days = ?, repetitions = ?, next_review_date = ?, last_review_date = ? WHERE user_id = ? AND id = ?",
+            (ease_factor, interval_days, repetitions, next_review, now, user_id, word_id)
         )
         
-        success = cursor.rowcount > 0
+        update_success = cursor.rowcount > 0
         conn.commit()
         conn.close()
-        return success
+        return update_success
     
-    def delete_vocabulary_word(self, word_id: int) -> bool:
+    def delete_vocabulary_word(self, user_id: int, word_id: int) -> bool:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        cursor.execute("DELETE FROM vocabulary_words WHERE id = ?", (word_id,))
+        cursor.execute("DELETE FROM vocabulary_words WHERE user_id = ? AND id = ?", (user_id, word_id))
         
         success = cursor.rowcount > 0
         conn.commit()
         conn.close()
         return success
     
-    def export_vocabulary_to_csv(self) -> str:
+    def export_vocabulary_to_csv(self, user_id: int) -> str:
         import csv
         import io
         
-        words = self.get_all_vocabulary_words()
+        words = self.get_all_vocabulary_words(user_id)
         
         output = io.StringIO()
         writer = csv.writer(output)
@@ -1159,7 +1241,7 @@ class Database:
         
         return output.getvalue()
     
-    def import_vocabulary_from_csv(self, csv_content: str) -> int:
+    def import_vocabulary_from_csv(self, user_id: int, csv_content: str) -> int:
         import csv
         import io
         
@@ -1190,7 +1272,7 @@ class Database:
                     if not translation:
                         translation = ''
                     
-                    self.add_vocabulary_word(word, explanation, translation)
+                    self.add_vocabulary_word(user_id, word, explanation, translation)
                     count += 1
                 except Exception as e:
                     print(f"Ошибка при добавлении слова '{word}': {e}")
@@ -1198,19 +1280,20 @@ class Database:
         
         return count
     
-    def delete_all_stats(self) -> bool:
+    def delete_all_stats(self, user_id: int) -> bool:
+        """Удаляет всю статистику для конкретного пользователя"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         try:
-            cursor.execute("DELETE FROM focus_sessions")
-            cursor.execute("DELETE FROM detailed_sessions")
-            cursor.execute("DELETE FROM sleep_records")
-            cursor.execute("DELETE FROM workout_plans")
-            cursor.execute("DELETE FROM workout_completions")
-            cursor.execute("DELETE FROM brain_dumps")
-            cursor.execute("DELETE FROM learning_notes")
-            cursor.execute("DELETE FROM focus_tasks")
+            cursor.execute("DELETE FROM focus_sessions WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM detailed_sessions WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM sleep_records WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM workout_plans WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM workout_completions WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM brain_dumps WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM learning_notes WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM focus_tasks WHERE user_id = ?", (user_id,))
             
             conn.commit()
             conn.close()

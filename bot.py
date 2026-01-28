@@ -302,8 +302,8 @@ def get_back_to_focus_keyboard() -> InlineKeyboardMarkup:
 async def cmd_start(message: Message):
     """Обработчик команды /start"""
     user_id = message.from_user.id
-    # Сохраняем дату первого использования и user_id, если еще не сохранены
-    first_session = db.get_first_session_date()
+    # Сохраняем дату первого использования для этого пользователя, если еще не сохранены
+    first_session = db.get_first_session_date(user_id)
     if not first_session:
         db.set_first_session_date(user_id)
     
@@ -627,6 +627,7 @@ async def process_vocab_explanation(message: Message, state: FSMContext):
 @dp.message(VocabularyStates.waiting_translation)
 async def process_vocab_translation(message: Message, state: FSMContext):
     """Обработка ввода перевода и сохранение слова"""
+    user_id = message.from_user.id
     data = await state.get_data()
     word = data.get('word', '').strip()
     explanation = data.get('explanation', '').strip()
@@ -634,7 +635,7 @@ async def process_vocab_translation(message: Message, state: FSMContext):
     
     if word and explanation and translation:
         try:
-            db.add_vocabulary_word(word, explanation, translation)
+            db.add_vocabulary_word(user_id, word, explanation, translation)
             await message.answer(f"Слово '{word}' добавлено в словарь!")
             
             # Показываем меню "Учить слова" после успешного добавления
@@ -688,8 +689,9 @@ async def vocab_cancel_handler(callback: CallbackQuery, state: FSMContext):
 async def vocab_start_handler(callback: CallbackQuery):
     """Начать обучение словам"""
     await callback.answer()
+    user_id = callback.from_user.id
     
-    words = db.get_words_for_review()
+    words = db.get_words_for_review(user_id)
     
     if not words:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -722,9 +724,10 @@ async def vocab_start_handler(callback: CallbackQuery):
 async def vocab_flip_handler(callback: CallbackQuery):
     """Перевернуть карточку - показать перевод"""
     await callback.answer()
+    user_id = callback.from_user.id
     
     word_id = int(callback.data.split("_")[-1])
-    word = db.get_vocabulary_word_by_id(word_id)
+    word = db.get_vocabulary_word_by_id(user_id, word_id)
     
     if not word:
         await callback.message.edit_text("Слово не найдено.")
@@ -748,12 +751,13 @@ async def vocab_flip_handler(callback: CallbackQuery):
 async def vocab_correct_handler(callback: CallbackQuery):
     """Пользователь ответил правильно"""
     await callback.answer("Правильно! ✓")
+    user_id = callback.from_user.id
     
     word_id = int(callback.data.split("_")[-1])
-    db.update_word_review(word_id, success=True)
+    db.update_word_review(user_id, word_id, success=True)
     
     # Показываем следующее слово
-    words = db.get_words_for_review()
+    words = db.get_words_for_review(user_id)
     
     if not words:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -783,12 +787,13 @@ async def vocab_correct_handler(callback: CallbackQuery):
 async def vocab_incorrect_handler(callback: CallbackQuery):
     """Пользователь ответил неправильно"""
     await callback.answer("Неправильно. Повторим позже.")
+    user_id = callback.from_user.id
     
     word_id = int(callback.data.split("_")[-1])
-    db.update_word_review(word_id, success=False)
+    db.update_word_review(user_id, word_id, success=False)
     
     # Показываем следующее слово (это слово будет показано чаще из-за низкого ease_factor)
-    words = db.get_words_for_review()
+    words = db.get_words_for_review(user_id)
     
     if not words:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -818,11 +823,12 @@ async def vocab_incorrect_handler(callback: CallbackQuery):
 async def vocab_skip_handler(callback: CallbackQuery):
     """Пропустить слово"""
     await callback.answer()
+    user_id = callback.from_user.id
     
     word_id = int(callback.data.split("_")[-1])
     
     # Показываем следующее слово
-    words = db.get_words_for_review()
+    words = db.get_words_for_review(user_id)
     
     # Фильтруем текущее слово
     words = [w for w in words if w['id'] != word_id]
@@ -873,7 +879,8 @@ async def vocab_delete_page_handler(callback: CallbackQuery):
 
 async def show_vocab_delete_page(callback: CallbackQuery, page: int = 0):
     """Показать страницу со словами для удаления"""
-    words = db.get_all_vocabulary_words()
+    user_id = callback.from_user.id
+    words = db.get_all_vocabulary_words(user_id)
     words_per_page = 10
     
     if not words:
@@ -947,9 +954,10 @@ async def show_vocab_delete_page(callback: CallbackQuery, page: int = 0):
 async def vocab_delete_word_handler(callback: CallbackQuery):
     """Удаление одного слова"""
     await callback.answer()
+    user_id = callback.from_user.id
     
     word_id = int(callback.data.split("_")[-1])
-    word = db.get_vocabulary_word_by_id(word_id)
+    word = db.get_vocabulary_word_by_id(user_id, word_id)
     
     if not word:
         await callback.message.edit_text("Слово не найдено.")
@@ -957,7 +965,7 @@ async def vocab_delete_word_handler(callback: CallbackQuery):
     
     # Определяем текущую страницу для возврата
     # Получаем все слова и находим индекс удаленного
-    all_words = db.get_all_vocabulary_words()
+    all_words = db.get_all_vocabulary_words(user_id)
     word_index = None
     for i, w in enumerate(all_words):
         if w['id'] == word_id:
@@ -969,12 +977,12 @@ async def vocab_delete_word_handler(callback: CallbackQuery):
         current_page = word_index // 10
     
     # Удаляем слово
-    success = db.delete_vocabulary_word(word_id)
+    success = db.delete_vocabulary_word(user_id, word_id)
     
     if success:
         # После удаления возвращаемся на ту же страницу (или предыдущую, если удалили последнее слово)
         # Проверяем, остались ли слова на текущей странице
-        remaining_words = db.get_all_vocabulary_words()
+        remaining_words = db.get_all_vocabulary_words(user_id)
         words_per_page = 10
         total_pages = (len(remaining_words) + words_per_page - 1) // words_per_page if remaining_words else 0
         
@@ -1027,13 +1035,14 @@ async def vocab_delete_all_confirm_handler(callback: CallbackQuery):
 async def vocab_delete_all_handler(callback: CallbackQuery):
     """Удаление всех слов"""
     await callback.answer()
+    user_id = callback.from_user.id
     
-    words = db.get_all_vocabulary_words()
+    words = db.get_all_vocabulary_words(user_id)
     count = len(words)
     
     # Удаляем все слова
     for word in words:
-        db.delete_vocabulary_word(word['id'])
+        db.delete_vocabulary_word(user_id, word['id'])
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Назад", callback_data="eng_vocabulary")]
@@ -1052,9 +1061,10 @@ async def vocab_delete_all_handler(callback: CallbackQuery):
 async def vocab_export_handler(callback: CallbackQuery):
     """Выгрузить все слова в CSV"""
     await callback.answer()
+    user_id = callback.from_user.id
     
     try:
-        csv_content = db.export_vocabulary_to_csv()
+        csv_content = db.export_vocabulary_to_csv(user_id)
         
         # Отправляем файл
         from io import BytesIO
@@ -1119,7 +1129,8 @@ async def process_vocab_file(message: Message, state: FSMContext):
             return
         
         # Импортируем слова
-        count = db.import_vocabulary_from_csv(csv_content)
+        user_id = message.from_user.id
+        count = db.import_vocabulary_from_csv(user_id, csv_content)
         
         if count > 0:
             await message.answer(f"Загружено {count} слов в словарь!")
@@ -1142,9 +1153,10 @@ async def process_vocab_file(message: Message, state: FSMContext):
 async def anal_stats_handler(callback: CallbackQuery):
     """Обработчик аналитики - статистика"""
     await callback.answer()
+    user_id = callback.from_user.id
     await callback.message.answer("Генерирую графики статистики...")
     
-    sessions = db.get_detailed_sessions(days=14)
+    sessions = db.get_detailed_sessions(user_id, days=14)
     if not sessions:
         await callback.message.answer("Недостаточно данных для анализа.", reply_markup=get_main_keyboard())
         return
@@ -1257,6 +1269,7 @@ async def process_task_name(message: Message, state: FSMContext):
 @dp.message(FocusStates.waiting_task_description)
 async def process_task_description(message: Message, state: FSMContext):
     """Обработка описания задачи"""
+    user_id = message.from_user.id
     data = await state.get_data()
     task_name = data.get("task_name")
     description = message.text.strip() if message.text else None
@@ -1264,7 +1277,7 @@ async def process_task_description(message: Message, state: FSMContext):
     if description == "-":
         description = None
     
-    task_id = db.add_focus_task(task_name, description)
+    task_id = db.add_focus_task(user_id, task_name, description)
     # Отправляем фото с кнопками управления задачами
     try:
         photo = FSInputFile("images/focus.jpg")
@@ -1282,7 +1295,8 @@ async def process_task_description(message: Message, state: FSMContext):
 async def focus_start_session_handler(callback: CallbackQuery, state: FSMContext):
     """Обработчик начала сессии - показываем список задач"""
     await callback.answer()
-    tasks = db.get_all_focus_tasks()
+    user_id = callback.from_user.id
+    tasks = db.get_all_focus_tasks(user_id)
     
     if not tasks:
         # Пытаемся отредактировать фото с кнопками управления задачами
@@ -1338,8 +1352,9 @@ async def focus_start_session_handler(callback: CallbackQuery, state: FSMContext
 async def focus_task_selected_handler(callback: CallbackQuery, state: FSMContext):
     """Обработчик выбора задачи - запускаем таймер"""
     await callback.answer()
+    user_id = callback.from_user.id
     task_id = int(callback.data.split("_")[-1])
-    task = db.get_focus_task_by_id(task_id)
+    task = db.get_focus_task_by_id(user_id, task_id)
     
     if not task:
         await callback.message.answer("Задача не найдена.", reply_markup=get_main_keyboard())
@@ -1558,7 +1573,8 @@ async def focus_cancel_handler(callback: CallbackQuery):
 async def focus_edit_tasks_handler(callback: CallbackQuery, state: FSMContext):
     """Обработчик редактирования задач"""
     await callback.answer()
-    tasks = db.get_all_focus_tasks()
+    user_id = callback.from_user.id
+    tasks = db.get_all_focus_tasks(user_id)
     
     if not tasks:
         # Пытаемся отредактировать фото с кнопками управления задачами
@@ -1612,8 +1628,9 @@ async def focus_edit_tasks_handler(callback: CallbackQuery, state: FSMContext):
 async def focus_edit_task_handler(callback: CallbackQuery, state: FSMContext):
     """Обработчик редактирования конкретной задачи"""
     await callback.answer()
+    user_id = callback.from_user.id
     task_id = int(callback.data.split("_")[-1])
-    task = db.get_focus_task_by_id(task_id)
+    task = db.get_focus_task_by_id(user_id, task_id)
     
     if not task:
         await callback.message.answer("Задача не найдена.", reply_markup=get_main_keyboard())
@@ -1630,14 +1647,15 @@ async def focus_edit_task_handler(callback: CallbackQuery, state: FSMContext):
 @dp.message(FocusStates.waiting_task_edit)
 async def process_task_edit(message: Message, state: FSMContext):
     """Обработка редактирования задачи"""
+    user_id = message.from_user.id
     data = await state.get_data()
     task_id = data.get("editing_task_id")
     new_name = message.text.strip() if message.text else ""
     
     if task_id and new_name:
-        task = db.get_focus_task_by_id(task_id)
+        task = db.get_focus_task_by_id(user_id, task_id)
         if task:
-            db.update_focus_task(task_id, new_name, task.get('description'))
+            db.update_focus_task(user_id, task_id, new_name, task.get('description'))
             # Отправляем фото с кнопками управления задачами
             try:
                 photo = FSInputFile("images/focus.jpg")
@@ -1676,7 +1694,8 @@ async def process_task_edit(message: Message, state: FSMContext):
 async def focus_delete_tasks_handler(callback: CallbackQuery, state: FSMContext):
     """Обработчик удаления задач"""
     await callback.answer()
-    tasks = db.get_all_focus_tasks()
+    user_id = callback.from_user.id
+    tasks = db.get_all_focus_tasks(user_id)
     
     if not tasks:
         # Пытаемся отредактировать фото с кнопками управления задачами
@@ -1730,11 +1749,12 @@ async def focus_delete_tasks_handler(callback: CallbackQuery, state: FSMContext)
 async def focus_delete_task_handler(callback: CallbackQuery, state: FSMContext):
     """Обработчик удаления конкретной задачи"""
     await callback.answer()
+    user_id = callback.from_user.id
     task_id = int(callback.data.split("_")[-1])
-    task = db.get_focus_task_by_id(task_id)
+    task = db.get_focus_task_by_id(user_id, task_id)
     
     if task:
-        db.delete_focus_task(task_id)
+        db.delete_focus_task(user_id, task_id)
         # Пытаемся отредактировать фото с кнопками управления задачами
         try:
             photo = FSInputFile("images/focus.jpg")
@@ -1816,9 +1836,10 @@ async def focus_delete_stats_handler(callback: CallbackQuery):
 async def focus_delete_stats_confirm_handler(callback: CallbackQuery):
     """Подтверждение удаления статистики"""
     await callback.answer("✅ Статистика удалена")
+    user_id = callback.from_user.id
     
-    # Удаляем все статистические данные
-    success = db.delete_all_stats()
+    # Удаляем все статистические данные для этого пользователя
+    success = db.delete_all_stats(user_id)
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
     ])
@@ -1859,9 +1880,10 @@ async def focus_delete_stats_confirm_handler(callback: CallbackQuery):
 async def workout_training_handler(callback: CallbackQuery, state: FSMContext):
     """Обработчик WORKOUT → Тренировки"""
     await callback.answer()
+    user_id = callback.from_user.id
     
     # Проверяем, есть ли план на неделю
-    plans = db.get_all_workout_plans()
+    plans = db.get_all_workout_plans(user_id)
     if len(plans) < 7:
         # Нужно заполнить план
         try:
@@ -1881,7 +1903,7 @@ async def workout_training_handler(callback: CallbackQuery, state: FSMContext):
         today = datetime.now()
         day_of_week = today.weekday()  # 0=понедельник, 6=воскресенье
         
-        plan = db.get_workout_plan(day_of_week)
+        plan = db.get_workout_plan(user_id, day_of_week)
         if plan:
             exercises = plan.split('\n')
             text = f"Тренировка на {['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'][day_of_week]}:\n\n"
@@ -1935,9 +1957,10 @@ async def workout_edit_plan_handler(callback: CallbackQuery, state: FSMContext):
 @dp.message(WorkoutStates.waiting_plan_monday)
 async def process_workout_monday(message: Message, state: FSMContext):
     """Обработка плана на понедельник"""
+    user_id = message.from_user.id
     exercises = message.text.strip() if message.text else ""
     if exercises:
-        db.set_workout_plan(0, exercises)
+        db.set_workout_plan(user_id, 0, exercises)
         await message.answer("План на понедельник сохранен.\n\nКакие упражнения на вторник?", reply_markup=get_back_to_workout_keyboard())
         await state.set_state(WorkoutStates.waiting_plan_tuesday)
     else:
@@ -1947,9 +1970,10 @@ async def process_workout_monday(message: Message, state: FSMContext):
 @dp.message(WorkoutStates.waiting_plan_tuesday)
 async def process_workout_tuesday(message: Message, state: FSMContext):
     """Обработка плана на вторник"""
+    user_id = message.from_user.id
     exercises = message.text.strip() if message.text else ""
     if exercises:
-        db.set_workout_plan(1, exercises)
+        db.set_workout_plan(user_id, 1, exercises)
         await message.answer("План на вторник сохранен.\n\nКакие упражнения на среду?", reply_markup=get_back_to_workout_keyboard())
         await state.set_state(WorkoutStates.waiting_plan_wednesday)
     else:
@@ -1959,9 +1983,10 @@ async def process_workout_tuesday(message: Message, state: FSMContext):
 @dp.message(WorkoutStates.waiting_plan_wednesday)
 async def process_workout_wednesday(message: Message, state: FSMContext):
     """Обработка плана на среду"""
+    user_id = message.from_user.id
     exercises = message.text.strip() if message.text else ""
     if exercises:
-        db.set_workout_plan(2, exercises)
+        db.set_workout_plan(user_id, 2, exercises)
         await message.answer("План на среду сохранен.\n\nКакие упражнения на четверг?", reply_markup=get_back_to_workout_keyboard())
         await state.set_state(WorkoutStates.waiting_plan_thursday)
     else:
@@ -1971,9 +1996,10 @@ async def process_workout_wednesday(message: Message, state: FSMContext):
 @dp.message(WorkoutStates.waiting_plan_thursday)
 async def process_workout_thursday(message: Message, state: FSMContext):
     """Обработка плана на четверг"""
+    user_id = message.from_user.id
     exercises = message.text.strip() if message.text else ""
     if exercises:
-        db.set_workout_plan(3, exercises)
+        db.set_workout_plan(user_id, 3, exercises)
         await message.answer("План на четверг сохранен.\n\nКакие упражнения на пятницу?", reply_markup=get_back_to_workout_keyboard())
         await state.set_state(WorkoutStates.waiting_plan_friday)
     else:
@@ -1983,9 +2009,10 @@ async def process_workout_thursday(message: Message, state: FSMContext):
 @dp.message(WorkoutStates.waiting_plan_friday)
 async def process_workout_friday(message: Message, state: FSMContext):
     """Обработка плана на пятницу"""
+    user_id = message.from_user.id
     exercises = message.text.strip() if message.text else ""
     if exercises:
-        db.set_workout_plan(4, exercises)
+        db.set_workout_plan(user_id, 4, exercises)
         await message.answer("План на пятницу сохранен.\n\nКакие упражнения на субботу?", reply_markup=get_back_to_workout_keyboard())
         await state.set_state(WorkoutStates.waiting_plan_saturday)
     else:
@@ -1995,9 +2022,10 @@ async def process_workout_friday(message: Message, state: FSMContext):
 @dp.message(WorkoutStates.waiting_plan_saturday)
 async def process_workout_saturday(message: Message, state: FSMContext):
     """Обработка плана на субботу"""
+    user_id = message.from_user.id
     exercises = message.text.strip() if message.text else ""
     if exercises:
-        db.set_workout_plan(5, exercises)
+        db.set_workout_plan(user_id, 5, exercises)
         await message.answer("План на субботу сохранен.\n\nКакие упражнения на воскресенье?", reply_markup=get_back_to_workout_keyboard())
         await state.set_state(WorkoutStates.waiting_plan_sunday)
     else:
@@ -2007,9 +2035,10 @@ async def process_workout_saturday(message: Message, state: FSMContext):
 @dp.message(WorkoutStates.waiting_plan_sunday)
 async def process_workout_sunday(message: Message, state: FSMContext):
     """Обработка плана на воскресенье"""
+    user_id = message.from_user.id
     exercises = message.text.strip() if message.text else ""
     if exercises:
-        db.set_workout_plan(6, exercises)
+        db.set_workout_plan(user_id, 6, exercises)
         await message.answer("План на воскресенье сохранен.\n\nПлан тренировок на неделю готов.")
         
         # Возвращаем на страницу WORKOUT
@@ -2038,9 +2067,10 @@ async def process_workout_sunday(message: Message, state: FSMContext):
 async def workout_done_handler(callback: CallbackQuery):
     """Отметить тренировку как выполненную"""
     await callback.answer()
+    user_id = callback.from_user.id
     day_of_week = int(callback.data.split("_")[-1])
     today = datetime.now().date().isoformat()
-    db.mark_workout_completed(today, day_of_week, True)
+    db.mark_workout_completed(user_id, today, day_of_week, True)
     try:
         await callback.message.edit_text("Тренировка отмечена как выполненная.")
     except:
@@ -2051,9 +2081,10 @@ async def workout_done_handler(callback: CallbackQuery):
 async def workout_skip_handler(callback: CallbackQuery):
     """Отметить тренировку как пропущенную"""
     await callback.answer()
+    user_id = callback.from_user.id
     day_of_week = int(callback.data.split("_")[-1])
     today = datetime.now().date().isoformat()
-    db.mark_workout_completed(today, day_of_week, False)
+    db.mark_workout_completed(user_id, today, day_of_week, False)
     try:
         await callback.message.edit_text("Тренировка отмечена как пропущенная.")
     except:
@@ -2064,8 +2095,9 @@ async def workout_skip_handler(callback: CallbackQuery):
 async def workout_analysis_handler(callback: CallbackQuery):
     """Обработчик WORKOUT → Анализ нагрузки"""
     await callback.answer()
+    user_id = callback.from_user.id
     # Получаем данные за последние 14 дней
-    completions = db.get_workout_completions(14)
+    completions = db.get_workout_completions(user_id, 14)
     
     if not completions:
         try:
@@ -2135,119 +2167,6 @@ async def cmd_focus(message: Message, state: FSMContext):
         "Управление задачами:",
         reply_markup=get_focus_tasks_keyboard()
     )
-    """Обработка выбора типа задачи (v1.1)"""
-    task_type_map = {
-        "task_theory": "theory",
-        "task_practice": "practice",
-        "task_reading": "reading",
-        "task_examples": "examples",
-        "task_input": "input",
-        "task_review": "review"
-    }
-    
-    task_type = task_type_map.get(callback.data, "theory")
-    data = await state.get_data()
-    domain = data.get("direction", "Другое")
-    
-    # Получаем рекомендуемую длительность на основе истории
-    avg_duration = db.get_average_focus_duration(domain, task_type)
-    if avg_duration:
-        # Адаптация: если последние 3 сессии < 70% или > 90%
-        recent_sessions = db.get_detailed_sessions(domain=domain, task_type=task_type, days=7)
-        if len(recent_sessions) >= 3:
-            last_3 = recent_sessions[:3]
-            completion_rates = [
-                (s.get('actual_minutes', 0) or 0) / (s.get('planned_minutes', 20) or 20)
-                for s in last_3 if s.get('planned_minutes')
-            ]
-            if completion_rates and all(r < 0.7 for r in completion_rates):
-                planned_minutes = max(10, int(avg_duration * 0.8))  # Уменьшаем
-            elif completion_rates and all(r > 0.9 for r in completion_rates):
-                planned_minutes = min(30, int(avg_duration * 1.2))  # Увеличиваем
-            else:
-                planned_minutes = int(avg_duration)
-        else:
-            planned_minutes = int(avg_duration) if avg_duration else 20
-    else:
-        planned_minutes = 20  # По умолчанию
-    
-    # Сохраняем тип задачи и запланированное время
-    await state.update_data(task_type=task_type, planned_minutes=planned_minutes, start_time=datetime.now().isoformat())
-    
-    # Запускаем таймер
-    user_id = callback.from_user.id
-    timer = FocusTimer(duration_minutes=planned_minutes)
-    
-    # Сохраняем данные в активных сессиях
-    active_sessions[user_id] = {
-        "direction": domain,
-        "task_type": task_type,
-        "planned_minutes": planned_minutes,
-        "message_id": callback.message.message_id
-    }
-    
-    # Отправляем сообщение с таймером
-    timer_message = await callback.message.answer(
-        f"Один раунд. {planned_minutes} минут. Без геройства. Я с тобой.\n\n⏱ 0:00 / {planned_minutes}:00\n" + "░" * 20
-    )
-    
-    # Сохраняем ID сообщения с таймером
-    active_sessions[user_id]["timer_message_id"] = timer_message.message_id
-    
-    async def update_timer_display(seconds_passed: int, total_seconds: int):
-        """Обновление отображения таймера"""
-        minutes = seconds_passed // 60
-        secs = seconds_passed % 60
-        total_minutes = total_seconds // 60
-        
-        # Прогресс-бар (20 символов)
-        progress = int((seconds_passed / total_seconds) * 20)
-        progress_bar = "█" * progress + "░" * (20 - progress)
-        
-        try:
-            await bot.edit_message_text(
-                chat_id=user_id,
-                message_id=timer_message.message_id,
-                text=f"Один раунд. {planned_minutes} минут. Без геройства. Я с тобой.\n\n⏱ {minutes}:{secs:02d} / {total_minutes}:00\n{progress_bar}"
-            )
-        except:
-            pass  # Игнорируем ошибки редактирования
-    
-    async def timer_cb():
-        # Обновляем таймер в последний раз
-        await update_timer_display(planned_minutes * 60, planned_minutes * 60, is_paused=False)
-        
-        # Отправляем сообщение о завершении раунда
-        await bot.send_message(
-            user_id,
-            "🔔 Раунд закончен. Как с фокусом?",
-            reply_markup=get_focus_status_keyboard()
-        )
-        
-        # Удаляем таймер из активных
-        if user_id in active_timers:
-            del active_timers[user_id]
-    
-    # Запускаем таймер с обновлениями каждые 10 секунд
-    async def timer_with_updates():
-        total_seconds = planned_minutes * 60
-        for i in range(0, total_seconds, 10):
-            await asyncio.sleep(10)
-            if user_id in active_timers and active_timers[user_id] == timer:
-                await update_timer_display(i + 10, total_seconds)
-            else:
-                break  # Таймер был отменен
-        # Если таймер все еще активен, вызываем callback
-        if user_id in active_timers and active_timers[user_id] == timer:
-            await timer_cb()
-    
-    # Сохраняем таймер
-    active_timers[user_id] = timer
-    
-    # Запускаем обновления таймера (это и есть основной таймер)
-    asyncio.create_task(timer_with_updates())
-    
-    await callback.answer()
 
 
 @dp.callback_query(F.data.in_(["focus_ok", "focus_partial", "focus_lost"]))
@@ -2297,6 +2216,7 @@ async def process_focus_description(message: Message, state: FSMContext):
     
     # Сохраняем детальную сессию
     db.add_detailed_session(
+        user_id=user_id,
         domain=task_name,  # Используем название задачи как domain
         task_type="custom",  # Тип задачи - кастомная
         planned_minutes=planned_minutes,
@@ -2308,6 +2228,7 @@ async def process_focus_description(message: Message, state: FSMContext):
     
     # Также сохраняем в старую таблицу для совместимости
     db.add_focus_session(
+        user_id=user_id,
         direction=task_name,
         duration=actual_minutes,
         focus_status=focus_status,
@@ -2353,7 +2274,8 @@ async def dump_new(callback: CallbackQuery, state: FSMContext):
 async def dump_list(callback: CallbackQuery, state: FSMContext):
     """Обработка кнопки списка записей"""
     await callback.answer()
-    dumps = db.get_all_brain_dumps(limit=20)
+    user_id = callback.from_user.id
+    dumps = db.get_all_brain_dumps(user_id, limit=20)
     
     if not dumps:
         await callback.message.edit_text("Записей пока нет.", reply_markup=get_back_to_dump_keyboard())
@@ -2385,8 +2307,9 @@ async def dump_list(callback: CallbackQuery, state: FSMContext):
 async def dump_view(callback: CallbackQuery, state: FSMContext):
     """Просмотр конкретной записи"""
     await callback.answer()
+    user_id = callback.from_user.id
     dump_id = int(callback.data.split("_")[-1])
-    dump = db.get_brain_dump_by_id(dump_id)
+    dump = db.get_brain_dump_by_id(user_id, dump_id)
     
     if not dump:
         await callback.message.edit_text("Запись не найдена.", reply_markup=get_back_to_dump_keyboard())
@@ -2411,8 +2334,9 @@ async def dump_view(callback: CallbackQuery, state: FSMContext):
 async def dump_edit_start(callback: CallbackQuery, state: FSMContext):
     """Начало редактирования записи"""
     await callback.answer()
+    user_id = callback.from_user.id
     dump_id = int(callback.data.split("_")[-1])
-    dump = db.get_brain_dump_by_id(dump_id)
+    dump = db.get_brain_dump_by_id(user_id, dump_id)
     
     if dump:
         await callback.message.edit_text(f"Редактируй запись:\n\n{dump['content']}")
@@ -2424,9 +2348,10 @@ async def dump_edit_start(callback: CallbackQuery, state: FSMContext):
 async def dump_delete(callback: CallbackQuery, state: FSMContext):
     """Удаление записи"""
     await callback.answer()
+    user_id = callback.from_user.id
     dump_id = int(callback.data.split("_")[-1])
     
-    if db.delete_brain_dump(dump_id):
+    if db.delete_brain_dump(user_id, dump_id):
         # После удаления возвращаемся к списку записей
         await dump_list(callback, state)
     else:
@@ -2437,10 +2362,11 @@ async def dump_delete(callback: CallbackQuery, state: FSMContext):
 @dp.message(DumpStates.waiting_content)
 async def process_dump(message: Message, state: FSMContext):
     """Обработка новой разгрузки головы"""
+    user_id = message.from_user.id
     content = message.text.strip() if message.text else ""
     
     if content:
-        db.add_brain_dump(content)
+        db.add_brain_dump(user_id, content)
         
         # Предлагаем выбрать одну вещь
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[
@@ -2461,12 +2387,13 @@ async def process_dump(message: Message, state: FSMContext):
 @dp.message(DumpStates.waiting_edit_text)
 async def process_dump_edit(message: Message, state: FSMContext):
     """Обработка редактирования записи"""
+    user_id = message.from_user.id
     data = await state.get_data()
     dump_id = data.get("dump_id")
     new_content = message.text.strip() if message.text else ""
     
     if dump_id and new_content:
-        if db.update_brain_dump(dump_id, new_content):
+        if db.update_brain_dump(user_id, dump_id, new_content):
             # Возвращаемся к просмотру записи
             keyboard = InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="Редактировать", callback_data=f"dump_edit_{dump_id}"),
@@ -2474,7 +2401,7 @@ async def process_dump_edit(message: Message, state: FSMContext):
             ], [
                 InlineKeyboardButton(text="Назад к списку", callback_data="dump_list")
             ]])
-            dump = db.get_brain_dump_by_id(dump_id)
+            dump = db.get_brain_dump_by_id(user_id, dump_id)
             if dump:
                 date_time = dump["created_at"][:16].replace("T", " ")
                 text = f"📝 Запись #{dump_id}\n📅 {date_time}\n\n{dump['content']}"
@@ -2568,12 +2495,14 @@ async def cmd_productivity(message_or_callback, state: FSMContext):
         callback = message_or_callback
         await callback.answer()
         message = callback.message
+        user_id = callback.from_user.id
     else:
         message = message_or_callback
+        user_id = message.from_user.id
     
     await message.answer("Генерирую тепловую карту...")
     
-    sessions = db.get_detailed_sessions(days=14)
+    sessions = db.get_detailed_sessions(user_id, days=14)
     if not sessions:
         await message.answer("Недостаточно данных для анализа.", reply_markup=get_main_keyboard())
         return
@@ -2592,9 +2521,10 @@ async def cmd_productivity(message_or_callback, state: FSMContext):
 @dp.message(Command("stats"))
 async def cmd_stats(message: Message):
     """Генерация графиков статистики"""
+    user_id = message.from_user.id
     await message.answer("Генерирую графики статистики...")
     
-    sessions = db.get_detailed_sessions(days=14)
+    sessions = db.get_detailed_sessions(user_id, days=14)
     if not sessions:
         await message.answer("Недостаточно данных для анализа.", reply_markup=get_main_keyboard())
         return
@@ -2664,10 +2594,10 @@ async def process_search(message: Message, state: FSMContext):
 
 
 # Трекинг сна
-def _sleep_menu_keyboard(show_continue: bool = True) -> InlineKeyboardMarkup:
+def _sleep_menu_keyboard(user_id: int, show_continue: bool = True) -> InlineKeyboardMarkup:
     """Клавиатура меню сна. При show_continue и наличии завершённого сна сегодня добавляет кнопку «Продолжить сон»."""
     row1 = [InlineKeyboardButton(text="Лёг спать", callback_data="sleep_start")]
-    if show_continue and db.has_completed_sleep_today():
+    if show_continue and db.has_completed_sleep_today(user_id):
         row1.append(InlineKeyboardButton(text="Продолжить сон", callback_data="sleep_continue"))
     keyboard_rows = [
         row1,
@@ -2686,11 +2616,13 @@ async def cmd_sleep(message_or_callback, state: FSMContext):
         callback = message_or_callback
         await callback.answer()
         message = callback.message
+        user_id = callback.from_user.id
     else:
         message = message_or_callback
+        user_id = message.from_user.id
     
     # Проверяем, есть ли незавершенная запись
-    latest_sleep = db.get_latest_sleep_record()
+    latest_sleep = db.get_latest_sleep_record(user_id)
     
     if latest_sleep:
         # Есть незавершенная запись - предлагаем завершить
@@ -2705,14 +2637,15 @@ async def cmd_sleep(message_or_callback, state: FSMContext):
         await message.answer("Есть незавершенная запись сна. Проснулся?", reply_markup=keyboard)
     else:
         # Нет записи - предлагаем начать (с кнопкой «Продолжить сон», если уже был сон сегодня)
-        await message.answer("Трекинг сна:", reply_markup=_sleep_menu_keyboard())
+        await message.answer("Трекинг сна:", reply_markup=_sleep_menu_keyboard(user_id))
 
 
 @dp.callback_query(F.data == "sleep_start")
 async def sleep_start(callback: CallbackQuery):
     """Начало сна"""
     await callback.answer()
-    record_id = db.add_sleep_start()
+    user_id = callback.from_user.id
+    record_id = db.add_sleep_start(user_id)
     
     # Возвращаем в меню "Сон" с кнопками управления
     sleep_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
@@ -2749,10 +2682,11 @@ async def sleep_start(callback: CallbackQuery):
 async def sleep_continue(callback: CallbackQuery):
     """Продолжение сна (с отсрочкой на 30 минут для засыпания)"""
     await callback.answer()
+    user_id = callback.from_user.id
     
     # Время начала сна = текущее время + 30 минут (время засыпания)
     sleep_start_time = datetime.now() + timedelta(minutes=30)
-    record_id = db.add_sleep_start(sleep_start_time=sleep_start_time)
+    record_id = db.add_sleep_start(user_id, sleep_start_time=sleep_start_time)
     
     # Возвращаем в меню "Сон" с кнопками управления
     sleep_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
@@ -2782,29 +2716,31 @@ async def sleep_continue(callback: CallbackQuery):
 async def sleep_cancel_handler(callback: CallbackQuery):
     """Отмена сна"""
     await callback.answer("❌ Сон отменен")
+    user_id = callback.from_user.id
     
     # Удаляем незавершенную запись сна
-    db.delete_latest_sleep_record()
+    db.delete_latest_sleep_record(user_id)
     
     # Возвращаем в меню "Сон"
     try:
-        await callback.message.edit_text("Трекинг сна:", reply_markup=_sleep_menu_keyboard())
+        await callback.message.edit_text("Трекинг сна:", reply_markup=_sleep_menu_keyboard(user_id))
     except:
-        await callback.message.answer("Трекинг сна:", reply_markup=_sleep_menu_keyboard())
+        await callback.message.answer("Трекинг сна:", reply_markup=_sleep_menu_keyboard(user_id))
 
 
 @dp.callback_query(F.data == "sleep_wake")
 async def sleep_wake(callback: CallbackQuery):
     """Пробуждение"""
     await callback.answer()
-    latest_sleep = db.get_latest_sleep_record()
+    user_id = callback.from_user.id
+    latest_sleep = db.get_latest_sleep_record(user_id)
     
     if latest_sleep:
-        duration_minutes = db.complete_sleep(latest_sleep['id'])
+        duration_minutes = db.complete_sleep(user_id, latest_sleep['id'])
         duration_hours = (duration_minutes or 0) / 60
         
         # Возвращаем в меню "Сон" (с кнопкой «Продолжить сон», т.к. уже есть завершённый сон сегодня)
-        keyboard = _sleep_menu_keyboard()
+        keyboard = _sleep_menu_keyboard(user_id)
         try:
             await callback.message.edit_text(
                 f"Сон зафиксирован.\n\n"
@@ -2834,10 +2770,11 @@ async def sleep_wake(callback: CallbackQuery):
 async def sleep_chart(callback: CallbackQuery):
     """График сна"""
     await callback.answer()
+    user_id = callback.from_user.id
     await callback.message.answer("Генерирую график сна...")
     
-    sleep_records = db.get_sleep_records(days=7)
-    avg_sleep = db.get_average_sleep(days=7)
+    sleep_records = db.get_sleep_records(user_id, days=7)
+    avg_sleep = db.get_average_sleep(user_id, days=7)
     
     # Клавиатура с кнопкой "Назад"
     back_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
@@ -2889,25 +2826,26 @@ async def sleep_delete_confirm(callback: CallbackQuery):
 async def sleep_delete_yes(callback: CallbackQuery):
     """Удаление всех данных о сне"""
     await callback.answer()
+    user_id = callback.from_user.id
     
-    success = db.delete_all_sleep_records()
+    success = db.delete_all_sleep_records(user_id)
     
     if success:
         try:
             await callback.message.edit_text(
                 "✅ Все данные о сне удалены.",
-                reply_markup=_sleep_menu_keyboard()
+                reply_markup=_sleep_menu_keyboard(user_id)
             )
         except:
             await callback.message.answer(
                 "✅ Все данные о сне удалены.",
-                reply_markup=_sleep_menu_keyboard()
+                reply_markup=_sleep_menu_keyboard(user_id)
             )
     else:
         try:
             await callback.message.edit_text(
                 "❌ Ошибка при удалении данных.",
-                reply_markup=_sleep_menu_keyboard()
+                reply_markup=_sleep_menu_keyboard(user_id)
             )
         except:
             await callback.message.answer(
@@ -2941,20 +2879,21 @@ async def cmd_export(message_or_callback, state: FSMContext):
 async def process_export(callback: CallbackQuery):
     """Обработка экспорта"""
     await callback.answer()
+    user_id = callback.from_user.id
     export_type = callback.data.split("_")[-1]
     
     try:
         if export_type == "sessions":
-            sessions = db.get_detailed_sessions(days=365)
+            sessions = db.get_detailed_sessions(user_id, days=365)
             csv_data = export_sessions_to_csv(sessions)
             filename = "sessions.csv"
         elif export_type == "english":
-            phrases = db.get_all_english_phrases()
+            phrases = db.get_all_english_phrases(user_id)
             reviews = []  # Можно добавить получение reviews
             csv_data = export_english_to_csv(phrases, reviews)
             filename = "english_progress.csv"
         elif export_type == "sleep":
-            sleep_records = db.get_sleep_records(days=365)
+            sleep_records = db.get_sleep_records(user_id, days=365)
             csv_data = export_sleep_to_csv(sleep_records)
             filename = "sleep.csv"
         else:
@@ -3153,7 +3092,7 @@ async def setup_webhook():
 
 
 async def notification_scheduler():
-    """Фоновая задача для автоматических уведомлений"""
+    """Фоновая задача для автоматических уведомлений (для всех пользователей)"""
     while True:
         try:
             await asyncio.sleep(60)  # Проверяем каждую минуту
@@ -3163,59 +3102,63 @@ async def notification_scheduler():
             current_minute = now.minute
             current_weekday = now.weekday()  # 0=понедельник, 6=воскресенье
             
-            # Получаем user_id из БД
-            user_id = db.get_user_id()
-            if not user_id:
-                continue  # Пользователь еще не использовал бота
+            # Получаем всех пользователей из БД
+            all_users = db.get_all_users()
+            if not all_users:
+                continue  # Нет пользователей
             
             # Проверяем, что сейчас 20:00
             if current_hour == 20 and current_minute == 0:
-                # Уведомление о тепловой карте каждые 14 дней (на 14-й день и далее каждые 14 дней)
-                days_since_first = db.get_days_since_first_session()
-                if days_since_first is not None and days_since_first >= 14 and days_since_first % 14 == 0:
-                    last_notification = db.get_last_heatmap_notification_date()
-                    today = datetime.now().strftime("%Y-%m-%d")
-                    
-                    if last_notification != today:
-                        # Генерируем тепловую карту и отправляем
-                        sessions = db.get_detailed_sessions(days=14)
-                        if sessions:
-                            try:
-                                heatmap_buf = generate_productivity_heatmap(sessions)
-                                photo_file = BufferedInputFile(heatmap_buf.read(), filename="productivity.png")
-                                
-                                await bot.send_photo(
-                                    chat_id=user_id,
-                                    photo=photo_file,
-                                    caption="Твоя тепловая карта готова. Взгляни!"
-                                )
-                                db.mark_heatmap_notification_sent()
-                                print(f"Отправлено уведомление о тепловой карте пользователю {user_id}")
-                            except Exception as e:
-                                print(f"Ошибка при отправке уведомления о тепловой карте: {e}")
-                
-                # Уведомление о графике сна каждое воскресенье
-                if current_weekday == 6:  # Воскресенье
-                    last_notification = db.get_last_sleep_chart_notification_date()
-                    today = datetime.now().strftime("%Y-%m-%d")
-                    
-                    if last_notification != today:
-                        # Генерируем график сна и отправляем
-                        sleep_records = db.get_sleep_records(days=7)
-                        if sleep_records:
-                            try:
-                                chart_buf = generate_sleep_chart(sleep_records)
-                                photo_file = BufferedInputFile(chart_buf.read(), filename="sleep_chart.png")
-                                
-                                await bot.send_photo(
-                                    chat_id=user_id,
-                                    photo=photo_file,
-                                    caption="Сделал твой график сна. Взгляни!"
-                                )
-                                db.mark_sleep_chart_notification_sent()
-                                print(f"Отправлено уведомление о графике сна пользователю {user_id}")
-                            except Exception as e:
-                                print(f"Ошибка при отправке уведомления о графике сна: {e}")
+                for user_id in all_users:
+                    try:
+                        # Уведомление о тепловой карте каждые 14 дней (на 14-й день и далее каждые 14 дней)
+                        days_since_first = db.get_days_since_first_session(user_id)
+                        if days_since_first is not None and days_since_first >= 14 and days_since_first % 14 == 0:
+                            last_notification = db.get_last_heatmap_notification_date(user_id)
+                            today = datetime.now().strftime("%Y-%m-%d")
+                            
+                            if last_notification != today:
+                                # Генерируем тепловую карту и отправляем
+                                sessions = db.get_detailed_sessions(user_id, days=14)
+                                if sessions:
+                                    try:
+                                        heatmap_buf = generate_productivity_heatmap(sessions)
+                                        photo_file = BufferedInputFile(heatmap_buf.read(), filename="productivity.png")
+                                        
+                                        await bot.send_photo(
+                                            chat_id=user_id,
+                                            photo=photo_file,
+                                            caption="Твоя тепловая карта готова. Взгляни!"
+                                        )
+                                        db.mark_heatmap_notification_sent(user_id)
+                                        print(f"Отправлено уведомление о тепловой карте пользователю {user_id}")
+                                    except Exception as e:
+                                        print(f"Ошибка при отправке уведомления о тепловой карте пользователю {user_id}: {e}")
+                        
+                        # Уведомление о графике сна каждое воскресенье
+                        if current_weekday == 6:  # Воскресенье
+                            last_notification = db.get_last_sleep_chart_notification_date(user_id)
+                            today = datetime.now().strftime("%Y-%m-%d")
+                            
+                            if last_notification != today:
+                                # Генерируем график сна и отправляем
+                                sleep_records = db.get_sleep_records(user_id, days=7)
+                                if sleep_records:
+                                    try:
+                                        chart_buf = generate_sleep_chart(sleep_records)
+                                        photo_file = BufferedInputFile(chart_buf.read(), filename="sleep_chart.png")
+                                        
+                                        await bot.send_photo(
+                                            chat_id=user_id,
+                                            photo=photo_file,
+                                            caption="Сделал твой график сна. Взгляни!"
+                                        )
+                                        db.mark_sleep_chart_notification_sent(user_id)
+                                        print(f"Отправлено уведомление о графике сна пользователю {user_id}")
+                                    except Exception as e:
+                                        print(f"Ошибка при отправке уведомления о графике сна пользователю {user_id}: {e}")
+                    except Exception as user_error:
+                        print(f"Ошибка при обработке пользователя {user_id}: {user_error}")
         except Exception as e:
             print(f"Ошибка в notification_scheduler: {e}")
             await asyncio.sleep(60)
