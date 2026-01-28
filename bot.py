@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 import uvicorn
+import aiohttp
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -111,6 +112,10 @@ class WorkoutStates(StatesGroup):
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не установлен. Создайте файл .env или установите переменную окружения.")
+
+# Очищаем токен от пробелов и переносов строк
+BOT_TOKEN = BOT_TOKEN.strip()
+print(f"DEBUG: BOT_TOKEN длина: {len(BOT_TOKEN)}, первые 20 символов: {BOT_TOKEN[:20]}...")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -2877,12 +2882,29 @@ async def setup_webhook():
         
         webhook_url = f"{app_url}/webhook"
     
+    # Пересоздаем объект бота с актуальным токеном из окружения
+    # Это гарантирует, что используется правильный токен
+    current_token_from_env = os.getenv("BOT_TOKEN", "").strip()
+    if current_token_from_env and current_token_from_env != bot.token:
+        print(f"DEBUG: Токен изменился, пересоздаем объект бота")
+        global bot
+        await bot.session.close()
+        bot = Bot(token=current_token_from_env)
+    
+    # Проверяем токен перед установкой webhook
+    current_token = bot.token
+    print(f"DEBUG: Токен бота при установке webhook: {current_token[:20]}... (длина: {len(current_token)})")
+    print(f"DEBUG: Webhook URL: {webhook_url}")
+    
     # Удаляем старый webhook (если есть)
     try:
         await bot.delete_webhook(drop_pending_updates=True)
         print("✓ Старый webhook удален")
     except Exception as e:
         print(f"⚠️  Ошибка при удалении старого webhook: {e}")
+        print(f"DEBUG: Тип ошибки: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
     
     # Устанавливаем новый webhook
     try:
@@ -2892,8 +2914,28 @@ async def setup_webhook():
         )
         print(f"✓ Webhook установлен: {webhook_url}")
     except Exception as e:
-        print(f"❌ Ошибка при установке webhook: {e}")
-        raise
+        print(f"⚠️  Ошибка при установке webhook через aiogram: {e}")
+        print(f"DEBUG: Пробуем установить webhook напрямую через API...")
+        
+        # Fallback: устанавливаем webhook напрямую через Telegram API
+        try:
+            api_url = f"https://api.telegram.org/bot{current_token}/setWebhook"
+            async with aiohttp.ClientSession() as session:
+                async with session.post(api_url, json={
+                    "url": webhook_url,
+                    "drop_pending_updates": True
+                }) as response:
+                    result = await response.json()
+                    if result.get("ok"):
+                        print(f"✓ Webhook установлен напрямую через API: {webhook_url}")
+                    else:
+                        print(f"❌ Ошибка при установке webhook через API: {result}")
+                        raise Exception(f"API вернул ошибку: {result.get('description', 'Unknown error')}")
+        except Exception as api_error:
+            print(f"❌ Ошибка при установке webhook через API: {api_error}")
+            import traceback
+            traceback.print_exc()
+            raise
 
 
 async def notification_scheduler():
