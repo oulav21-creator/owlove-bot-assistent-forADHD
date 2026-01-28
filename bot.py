@@ -2861,6 +2861,8 @@ async def webhook_handler(request: Request):
 
 async def setup_webhook():
     """Настройка webhook при старте приложения"""
+    global bot  # Объявляем global в начале функции
+    
     # Получаем URL для webhook (поддержка различных платформ)
     # Приоритет: WEBHOOK_URL > RENDER_EXTERNAL_URL > SCALINGO_APP_URL > SCALINGO_URL
     webhook_url_env = os.getenv("WEBHOOK_URL")  # Для VPS и кастомных деплоев
@@ -2887,7 +2889,6 @@ async def setup_webhook():
     current_token_from_env = os.getenv("BOT_TOKEN", "").strip()
     if current_token_from_env and current_token_from_env != bot.token:
         print(f"DEBUG: Токен изменился, пересоздаем объект бота")
-        global bot
         await bot.session.close()
         bot = Bot(token=current_token_from_env)
     
