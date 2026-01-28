@@ -41,7 +41,9 @@ from services import (
 from irregular_verbs import IRREGULAR_VERBS
 
 # Загружаем переменные окружения из .env файла
-load_dotenv()
+# Используем явный путь к .env файлу для работы через systemd
+env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+load_dotenv(env_path)
 
 
 # Состояния FSM для диалогов
