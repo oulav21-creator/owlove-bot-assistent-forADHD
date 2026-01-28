@@ -41,36 +41,58 @@ from services import (
 )
 from irregular_verbs import IRREGULAR_VERBS
 
-# Загружаем переменные окружения из .env файла
-# Используем явный путь к .env файлу для работы через systemd
+# Читаем токен НАПРЯМУЮ из .env файла, игнорируя переменные окружения
+# Это гарантирует, что systemd Environment переменные не переопределят токен
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
 
-# Проверяем, есть ли BOT_TOKEN в окружении ДО загрузки .env
-token_before = os.getenv("BOT_TOKEN")
-print(f"DEBUG: BOT_TOKEN ДО загрузки .env: {token_before[:20] if token_before else 'НЕТ'}...")
-
-if os.path.exists(env_path):
-    # override=True ПРИНУДИТЕЛЬНО перезаписывает существующие переменные
-    # Это критично, если systemd установил переменные окружения
-    load_dotenv(env_path, override=True)
-    print(f"DEBUG: .env файл загружен из {env_path} (override=True)")
+def read_token_from_file(file_path):
+    """Читает BOT_TOKEN напрямую из .env файла"""
+    if not os.path.exists(file_path):
+        return None
     
-    # Читаем токен напрямую из файла для проверки
     try:
-        with open(env_path, 'r', encoding='utf-8') as f:
+        with open(file_path, 'r', encoding='utf-8') as f:
             for line in f:
-                if line.strip().startswith('BOT_TOKEN='):
-                    token_from_file = line.split('=', 1)[1].strip()
-                    print(f"DEBUG: Токен из файла .env (raw): {token_from_file[:20]}... (длина: {len(token_from_file)})")
-                    break
+                line = line.strip()
+                # Пропускаем комментарии и пустые строки
+                if not line or line.startswith('#'):
+                    continue
+                # Ищем BOT_TOKEN (может быть с пробелами или без)
+                if line.startswith('BOT_TOKEN='):
+                    token = line.split('=', 1)[1].strip()
+                    # Удаляем кавычки, если есть
+                    token = token.strip('"\'')
+                    return token
     except Exception as e:
-        print(f"DEBUG: Ошибка при чтении .env файла напрямую: {e}")
+        print(f"DEBUG: Ошибка при чтении токена из файла: {e}")
+    
+    return None
+
+# Читаем токен напрямую из файла
+BOT_TOKEN_FROM_FILE = read_token_from_file(env_path)
+
+# Проверяем, что в окружении (для диагностики)
+token_from_env = os.getenv("BOT_TOKEN")
+print(f"DEBUG: Токен из переменных окружения: {token_from_env[:20] if token_from_env else 'НЕТ'}...")
+print(f"DEBUG: Токен из файла .env: {BOT_TOKEN_FROM_FILE[:20] if BOT_TOKEN_FROM_FILE else 'НЕТ'}...")
+
+# Используем токен из файла, если он есть, иначе из окружения
+if BOT_TOKEN_FROM_FILE:
+    # Удаляем старую переменную окружения, если она есть
+    if 'BOT_TOKEN' in os.environ:
+        del os.environ['BOT_TOKEN']
+    # Устанавливаем токен из файла
+    os.environ['BOT_TOKEN'] = BOT_TOKEN_FROM_FILE
+    print(f"DEBUG: Используется токен из файла .env (принудительно)")
+else:
+    print(f"DEBUG: Токен из файла не найден, используем из окружения")
+
+# Загружаем остальные переменные из .env
+if os.path.exists(env_path):
+    load_dotenv(env_path, override=True)
+    print(f"DEBUG: .env файл загружен из {env_path}")
 else:
     print(f"DEBUG: .env файл не найден по пути {env_path}")
-
-# Проверяем, что получилось ПОСЛЕ загрузки
-token_after = os.getenv("BOT_TOKEN")
-print(f"DEBUG: BOT_TOKEN ПОСЛЕ загрузки .env: {token_after[:20] if token_after else 'НЕТ'}...")
 
 
 # Состояния FSM для диалогов
@@ -131,13 +153,14 @@ class WorkoutStates(StatesGroup):
 
 
 # Инициализация
+# Токен уже установлен выше из файла .env
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не установлен. Создайте файл .env или установите переменную окружения.")
 
 # Очищаем токен от пробелов и переносов строк
 BOT_TOKEN = BOT_TOKEN.strip()
-print(f"DEBUG: BOT_TOKEN длина: {len(BOT_TOKEN)}, первые 20 символов: {BOT_TOKEN[:20]}...")
+print(f"DEBUG: BOT_TOKEN для создания бота: {BOT_TOKEN[:20]}... (длина: {len(BOT_TOKEN)})")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
