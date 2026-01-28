@@ -43,7 +43,11 @@ from irregular_verbs import IRREGULAR_VERBS
 # Загружаем переменные окружения из .env файла
 # Используем явный путь к .env файлу для работы через systemd
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
-load_dotenv(env_path)
+if os.path.exists(env_path):
+    load_dotenv(env_path)
+    print(f"DEBUG: .env файл загружен из {env_path}")
+else:
+    print(f"DEBUG: .env файл не найден по пути {env_path}")
 
 
 # Состояния FSM для диалогов
@@ -3041,6 +3045,10 @@ def main():
     render_url = os.getenv("RENDER_EXTERNAL_URL")
     scalingo_url = os.getenv("SCALINGO_APP_URL") or os.getenv("SCALINGO_URL")
     deploy_mode = os.getenv("DEPLOY_MODE", "").lower() == "true"
+    
+    # Отладочный вывод для диагностики
+    print(f"DEBUG: WEBHOOK_URL = {webhook_url}")
+    print(f"DEBUG: has_webhook_url = {bool(webhook_url or render_url or scalingo_url)}")
     
     # Определяем, есть ли URL для webhook
     has_webhook_url = webhook_url or render_url or scalingo_url
