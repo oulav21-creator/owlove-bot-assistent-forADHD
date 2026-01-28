@@ -1,0 +1,17 @@
+[Unit]
+Description=Telegram Bot Напарник
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/botfocus
+# НЕ устанавливаем Environment переменные здесь - они будут загружены из .env через start_bot.sh
+ExecStart=/root/botfocus/start_bot.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

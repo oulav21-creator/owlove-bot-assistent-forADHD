@@ -48,23 +48,48 @@ env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
 def read_token_from_file(file_path):
     """Читает BOT_TOKEN напрямую из .env файла"""
     if not os.path.exists(file_path):
+        print(f"DEBUG: Файл .env не существует: {file_path}")
         return None
+    
+    print(f"DEBUG: Читаем токен из файла: {file_path}")
     
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
-            for line in f:
+            lines = f.readlines()
+            print(f"DEBUG: Прочитано строк из .env: {len(lines)}")
+            
+            for i, line in enumerate(lines, 1):
+                original_line = line
                 line = line.strip()
+                
                 # Пропускаем комментарии и пустые строки
                 if not line or line.startswith('#'):
                     continue
+                
                 # Ищем BOT_TOKEN (может быть с пробелами или без)
-                if line.startswith('BOT_TOKEN='):
-                    token = line.split('=', 1)[1].strip()
-                    # Удаляем кавычки, если есть
-                    token = token.strip('"\'')
-                    return token
+                if 'BOT_TOKEN' in line and '=' in line:
+                    # Разделяем по первому знаку =
+                    parts = line.split('=', 1)
+                    if len(parts) == 2 and parts[0].strip() == 'BOT_TOKEN':
+                        token = parts[1].strip()
+                        # Удаляем кавычки, если есть
+                        token = token.strip('"\'')
+                        print(f"DEBUG: Токен найден в строке {i}: {token[:20]}... (длина: {len(token)})")
+                        if token:
+                            return token
+                        else:
+                            print(f"DEBUG: ВНИМАНИЕ: Токен пустой в строке {i}")
+            
+            print(f"DEBUG: BOT_TOKEN не найден в файле .env")
+            print(f"DEBUG: Первые 500 символов файла для диагностики:")
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read(500)
+                print(content)
+                
     except Exception as e:
         print(f"DEBUG: Ошибка при чтении токена из файла: {e}")
+        import traceback
+        traceback.print_exc()
     
     return None
 
