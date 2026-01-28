@@ -44,11 +44,33 @@ from irregular_verbs import IRREGULAR_VERBS
 # Загружаем переменные окружения из .env файла
 # Используем явный путь к .env файлу для работы через systemd
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+
+# Проверяем, есть ли BOT_TOKEN в окружении ДО загрузки .env
+token_before = os.getenv("BOT_TOKEN")
+print(f"DEBUG: BOT_TOKEN ДО загрузки .env: {token_before[:20] if token_before else 'НЕТ'}...")
+
 if os.path.exists(env_path):
-    load_dotenv(env_path)
-    print(f"DEBUG: .env файл загружен из {env_path}")
+    # override=True ПРИНУДИТЕЛЬНО перезаписывает существующие переменные
+    # Это критично, если systemd установил переменные окружения
+    load_dotenv(env_path, override=True)
+    print(f"DEBUG: .env файл загружен из {env_path} (override=True)")
+    
+    # Читаем токен напрямую из файла для проверки
+    try:
+        with open(env_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                if line.strip().startswith('BOT_TOKEN='):
+                    token_from_file = line.split('=', 1)[1].strip()
+                    print(f"DEBUG: Токен из файла .env (raw): {token_from_file[:20]}... (длина: {len(token_from_file)})")
+                    break
+    except Exception as e:
+        print(f"DEBUG: Ошибка при чтении .env файла напрямую: {e}")
 else:
     print(f"DEBUG: .env файл не найден по пути {env_path}")
+
+# Проверяем, что получилось ПОСЛЕ загрузки
+token_after = os.getenv("BOT_TOKEN")
+print(f"DEBUG: BOT_TOKEN ПОСЛЕ загрузки .env: {token_after[:20] if token_after else 'НЕТ'}...")
 
 
 # Состояния FSM для диалогов
@@ -2884,11 +2906,33 @@ async def setup_webhook():
         
         webhook_url = f"{app_url}/webhook"
     
-    # ВСЕГДА пересоздаем объект бота с токеном из окружения
-    # Это гарантирует, что используется актуальный токен
-    current_token_from_env = os.getenv("BOT_TOKEN", "").strip()
+    # ВСЕГДА читаем токен НАПРЯМУЮ из .env файла, чтобы гарантировать актуальность
+    # Это обходит любые проблемы с переменными окружения в systemd
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+    current_token_from_env = None
+    
+    # Сначала пробуем прочитать напрямую из файла
+    if os.path.exists(env_path):
+        try:
+            with open(env_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('BOT_TOKEN='):
+                        current_token_from_env = line.split('=', 1)[1].strip()
+                        # Удаляем кавычки, если есть
+                        current_token_from_env = current_token_from_env.strip('"\'')
+                        print(f"DEBUG: Токен прочитан НАПРЯМУЮ из файла .env")
+                        break
+        except Exception as e:
+            print(f"DEBUG: Ошибка при чтении токена из файла: {e}")
+    
+    # Если не получилось из файла, пробуем из окружения
     if not current_token_from_env:
-        print("❌ BOT_TOKEN не найден в окружении!")
+        current_token_from_env = os.getenv("BOT_TOKEN", "").strip()
+        print(f"DEBUG: Токен прочитан из переменных окружения")
+    
+    if not current_token_from_env:
+        print("❌ BOT_TOKEN не найден ни в файле .env, ни в окружении!")
         return
     
     # Очищаем токен от всех невидимых символов
