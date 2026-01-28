@@ -14,7 +14,7 @@ Telegram-бот «Напарник» v2.0 для личной эффективн
 import asyncio
 import os
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
@@ -2664,6 +2664,20 @@ async def process_search(message: Message, state: FSMContext):
 
 
 # Трекинг сна
+def _sleep_menu_keyboard(show_continue: bool = True) -> InlineKeyboardMarkup:
+    """Клавиатура меню сна. При show_continue и наличии завершённого сна сегодня добавляет кнопку «Продолжить сон»."""
+    row1 = [InlineKeyboardButton(text="Лёг спать", callback_data="sleep_start")]
+    if show_continue and db.has_completed_sleep_today():
+        row1.append(InlineKeyboardButton(text="Продолжить сон", callback_data="sleep_continue"))
+    keyboard_rows = [
+        row1,
+        [InlineKeyboardButton(text="График сна", callback_data="sleep_chart")],
+        [InlineKeyboardButton(text="Удалить данные", callback_data="sleep_delete_confirm")],
+        [InlineKeyboardButton(text="Назад", callback_data="back_to_workout")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+
+
 @dp.message(Command("sleep"))
 @dp.callback_query(F.data == "cmd_sleep")
 async def cmd_sleep(message_or_callback, state: FSMContext):
@@ -2690,14 +2704,8 @@ async def cmd_sleep(message_or_callback, state: FSMContext):
         ]])
         await message.answer("Есть незавершенная запись сна. Проснулся?", reply_markup=keyboard)
     else:
-        # Нет записи - предлагаем начать
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="Лёг спать", callback_data="sleep_start"),
-            InlineKeyboardButton(text="График сна", callback_data="sleep_chart")
-        ], [
-            InlineKeyboardButton(text="Назад", callback_data="back_to_workout")
-        ]])
-        await message.answer("Трекинг сна:", reply_markup=keyboard)
+        # Нет записи - предлагаем начать (с кнопкой «Продолжить сон», если уже был сон сегодня)
+        await message.answer("Трекинг сна:", reply_markup=_sleep_menu_keyboard())
 
 
 @dp.callback_query(F.data == "sleep_start")
@@ -2737,6 +2745,39 @@ async def sleep_start(callback: CallbackQuery):
     asyncio.create_task(fix_sleep())
 
 
+@dp.callback_query(F.data == "sleep_continue")
+async def sleep_continue(callback: CallbackQuery):
+    """Продолжение сна (с отсрочкой на 30 минут для засыпания)"""
+    await callback.answer()
+    
+    # Время начала сна = текущее время + 30 минут (время засыпания)
+    sleep_start_time = datetime.now() + timedelta(minutes=30)
+    record_id = db.add_sleep_start(sleep_start_time=sleep_start_time)
+    
+    # Возвращаем в меню "Сон" с кнопками управления
+    sleep_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Проснулся", callback_data="sleep_wake"),
+        InlineKeyboardButton(text="Отменить", callback_data="sleep_cancel")
+    ], [
+        InlineKeyboardButton(text="График сна", callback_data="sleep_chart")
+    ], [
+        InlineKeyboardButton(text="Назад", callback_data="back_to_workout")
+    ]])
+    
+    try:
+        await callback.message.edit_text(
+            "Продолжение сна начато. Время начала: через 30 минут (учитывается время засыпания).\n\n"
+            "Когда проснёшься, нажми 'Проснулся'.",
+            reply_markup=sleep_keyboard
+        )
+    except:
+        await callback.message.answer(
+            "Продолжение сна начато. Время начала: через 30 минут (учитывается время засыпания).\n\n"
+            "Когда проснёшься, нажми 'Проснулся'.",
+            reply_markup=sleep_keyboard
+        )
+
+
 @dp.callback_query(F.data == "sleep_cancel")
 async def sleep_cancel_handler(callback: CallbackQuery):
     """Отмена сна"""
@@ -2746,17 +2787,10 @@ async def sleep_cancel_handler(callback: CallbackQuery):
     db.delete_latest_sleep_record()
     
     # Возвращаем в меню "Сон"
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Лёг спать", callback_data="sleep_start"),
-        InlineKeyboardButton(text="График сна", callback_data="sleep_chart")
-    ], [
-        InlineKeyboardButton(text="Назад", callback_data="back_to_workout")
-    ]])
-    
     try:
-        await callback.message.edit_text("Трекинг сна:", reply_markup=keyboard)
+        await callback.message.edit_text("Трекинг сна:", reply_markup=_sleep_menu_keyboard())
     except:
-        await callback.message.answer("Трекинг сна:", reply_markup=keyboard)
+        await callback.message.answer("Трекинг сна:", reply_markup=_sleep_menu_keyboard())
 
 
 @dp.callback_query(F.data == "sleep_wake")
@@ -2766,17 +2800,11 @@ async def sleep_wake(callback: CallbackQuery):
     latest_sleep = db.get_latest_sleep_record()
     
     if latest_sleep:
-        db.complete_sleep(latest_sleep['id'])
-        duration_hours = (latest_sleep.get('duration_minutes') or 0) / 60
+        duration_minutes = db.complete_sleep(latest_sleep['id'])
+        duration_hours = (duration_minutes or 0) / 60
         
-        # Возвращаем в меню "Сон"
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="Лёг спать", callback_data="sleep_start"),
-            InlineKeyboardButton(text="График сна", callback_data="sleep_chart")
-        ], [
-            InlineKeyboardButton(text="Назад", callback_data="back_to_workout")
-        ]])
-        
+        # Возвращаем в меню "Сон" (с кнопкой «Продолжить сон», т.к. уже есть завершённый сон сегодня)
+        keyboard = _sleep_menu_keyboard()
         try:
             await callback.message.edit_text(
                 f"Сон зафиксирован.\n\n"
@@ -2829,6 +2857,63 @@ async def sleep_chart(callback: CallbackQuery):
         await callback.message.answer_photo(photo=photo_file, caption=caption, reply_markup=back_keyboard)
     except Exception as e:
         await callback.message.answer(f"Ошибка: {e}", reply_markup=back_keyboard)
+
+
+@dp.callback_query(F.data == "sleep_delete_confirm")
+async def sleep_delete_confirm(callback: CallbackQuery):
+    """Подтверждение удаления всех данных о сне"""
+    await callback.answer()
+    
+    confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Да, удалить", callback_data="sleep_delete_yes"),
+        InlineKeyboardButton(text="Отмена", callback_data="back_to_sleep")
+    ]])
+    
+    try:
+        await callback.message.edit_text(
+            "⚠️ Внимание!\n\n"
+            "Вы уверены, что хотите удалить ВСЕ данные о сне?\n"
+            "Это действие нельзя отменить.",
+            reply_markup=confirm_keyboard
+        )
+    except:
+        await callback.message.answer(
+            "⚠️ Внимание!\n\n"
+            "Вы уверены, что хотите удалить ВСЕ данные о сне?\n"
+            "Это действие нельзя отменить.",
+            reply_markup=confirm_keyboard
+        )
+
+
+@dp.callback_query(F.data == "sleep_delete_yes")
+async def sleep_delete_yes(callback: CallbackQuery):
+    """Удаление всех данных о сне"""
+    await callback.answer()
+    
+    success = db.delete_all_sleep_records()
+    
+    if success:
+        try:
+            await callback.message.edit_text(
+                "✅ Все данные о сне удалены.",
+                reply_markup=_sleep_menu_keyboard()
+            )
+        except:
+            await callback.message.answer(
+                "✅ Все данные о сне удалены.",
+                reply_markup=_sleep_menu_keyboard()
+            )
+    else:
+        try:
+            await callback.message.edit_text(
+                "❌ Ошибка при удалении данных.",
+                reply_markup=_sleep_menu_keyboard()
+            )
+        except:
+            await callback.message.answer(
+                "❌ Ошибка при удалении данных.",
+                reply_markup=_sleep_menu_keyboard()
+            )
 
 
 # Экспорт данных

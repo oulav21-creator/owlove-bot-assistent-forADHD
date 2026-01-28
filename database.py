@@ -579,16 +579,21 @@ class Database:
     
     # ========== Трекинг сна (v1.1) ==========
     
-    def add_sleep_start(self) -> int:
+    def add_sleep_start(self, sleep_start_time: Optional[datetime] = None) -> int:
+        """Добавляет запись начала сна. Если sleep_start_time не указан, используется текущее время."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        today = datetime.now().strftime("%Y-%m-%d")
+        if sleep_start_time is None:
+            sleep_start_time = datetime.now()
+        
+        today = sleep_start_time.strftime("%Y-%m-%d")
         now = datetime.now().isoformat()
+        sleep_start_iso = sleep_start_time.isoformat()
         
         cursor.execute(
             "INSERT INTO sleep_records (date, sleep_start, created_at) VALUES (?, ?, ?)",
-            (today, now, now)
+            (today, sleep_start_iso, now)
         )
         
         record_id = cursor.lastrowid
@@ -597,7 +602,8 @@ class Database:
         
         return record_id
     
-    def complete_sleep(self, record_id: int) -> bool:
+    def complete_sleep(self, record_id: int) -> Optional[int]:
+        """Завершает запись сна. Возвращает длительность в минутах или None при ошибке."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -608,7 +614,7 @@ class Database:
         
         if not result:
             conn.close()
-            return False
+            return None
         
         sleep_start = datetime.fromisoformat(result[0])
         sleep_end = datetime.now()
@@ -622,7 +628,7 @@ class Database:
         conn.commit()
         conn.close()
         
-        return True
+        return duration
     
     def get_sleep_records(self, days: int = 30) -> List[Dict[str, Any]]:
         conn = sqlite3.connect(self.db_path)
@@ -667,6 +673,19 @@ class Database:
         
         return dict(result) if result else None
     
+    def has_completed_sleep_today(self) -> bool:
+        """Есть ли сегодня хотя бы одна завершённая запись сна."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        today = datetime.now().strftime("%Y-%m-%d")
+        cursor.execute(
+            "SELECT 1 FROM sleep_records WHERE date = ? AND sleep_end IS NOT NULL LIMIT 1",
+            (today,)
+        )
+        result = cursor.fetchone()
+        conn.close()
+        return result is not None
+    
     def delete_latest_sleep_record(self) -> bool:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -685,6 +704,20 @@ class Database:
         
         conn.close()
         return False
+    
+    def delete_all_sleep_records(self) -> bool:
+        """Удаляет все записи о сне."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("DELETE FROM sleep_records")
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            conn.close()
+            return False
 
     # Методы для тренировок
     def set_workout_plan(self, day_of_week: int, exercises: str) -> bool:
