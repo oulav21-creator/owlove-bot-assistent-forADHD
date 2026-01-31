@@ -138,6 +138,47 @@ class Database:
             )
         """)
         
+        # Таблица выполнения упражнений тренировки (по каждому упражнению)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS workout_exercise_completions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 0,
+                date TEXT NOT NULL,
+                day_of_week INTEGER NOT NULL,
+                exercise_index INTEGER NOT NULL,
+                exercise_name TEXT NOT NULL,
+                completed INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+        """)
+        
+        # Таблица планов ENG на неделю
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS eng_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 0,
+                day_of_week INTEGER NOT NULL,
+                exercises TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(user_id, day_of_week)
+            )
+        """)
+        
+        # Таблица выполнения упражнений ENG (по каждому упражнению)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS eng_exercise_completions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 0,
+                date TEXT NOT NULL,
+                day_of_week INTEGER NOT NULL,
+                exercise_index INTEGER NOT NULL,
+                exercise_name TEXT NOT NULL,
+                completed INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+        """)
+        
         # Таблица неправильных глаголов (общая для всех пользователей - справочник)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS irregular_verbs (
@@ -199,6 +240,9 @@ class Database:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sleep_records_date ON sleep_records(date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_workout_completions_date ON workout_completions(date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_workout_completions_day ON workout_completions(day_of_week)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_workout_exercise_completions_date ON workout_exercise_completions(date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_eng_plans_user ON eng_plans(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_eng_exercise_completions_date ON eng_exercise_completions(date)")
         
         # Индексы для user_id (для быстрой фильтрации по пользователю)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_focus_sessions_user ON focus_sessions(user_id)")
@@ -231,6 +275,9 @@ class Database:
             'sleep_records',
             'workout_plans',
             'workout_completions',
+            'workout_exercise_completions',
+            'eng_plans',
+            'eng_exercise_completions',
             'focus_tasks',
             'vocabulary_words'
         ]
@@ -501,6 +548,41 @@ class Database:
         conn.close()
         
         return sessions
+    
+    def get_combined_sessions_for_heatmap(self, user_id: int, days: int = 30) -> List[Dict[str, Any]]:
+        """Объединяет FOCUS (detailed_sessions), WORKOUT и ENG для точной тепловой карты"""
+        result = []
+        
+        # FOCUS сессии
+        focus = self.get_detailed_sessions(user_id, days=days)
+        for s in focus:
+            result.append({'created_at': s['created_at'], 'status': s.get('status', 'completed')})
+        
+        # WORKOUT упражнения
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT created_at, completed FROM workout_exercise_completions 
+               WHERE user_id = ? AND date >= date('now', '-' || ? || ' days')""",
+            (user_id, days)
+        )
+        for row in cursor.fetchall():
+            r = dict(row)
+            result.append({'created_at': r['created_at'], 'status': 'completed' if r['completed'] else 'skipped'})
+        
+        # ENG упражнения
+        cursor.execute(
+            """SELECT created_at, completed FROM eng_exercise_completions 
+               WHERE user_id = ? AND date >= date('now', '-' || ? || ' days')""",
+            (user_id, days)
+        )
+        for row in cursor.fetchall():
+            r = dict(row)
+            result.append({'created_at': r['created_at'], 'status': 'completed' if r['completed'] else 'skipped'})
+        
+        conn.close()
+        return result
     
     def get_average_focus_duration(self, user_id: int, domain: str, task_type: str) -> Optional[float]:
         conn = sqlite3.connect(self.db_path)
@@ -874,6 +956,119 @@ class Database:
             (user_id, days)
         )
         
+        records = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return records
+    
+    def mark_workout_exercise_completed(
+        self, user_id: int, date: str, day_of_week: int,
+        exercise_index: int, exercise_name: str, completed: bool
+    ) -> bool:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        cursor.execute(
+            """INSERT INTO workout_exercise_completions 
+               (user_id, date, day_of_week, exercise_index, exercise_name, completed, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, date, day_of_week, exercise_index, exercise_name, 1 if completed else 0, now)
+        )
+        conn.commit()
+        conn.close()
+        return True
+    
+    def get_workout_exercise_completions_for_date(
+        self, user_id: int, date: str, day_of_week: int
+    ) -> List[Dict[str, Any]]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT * FROM workout_exercise_completions 
+               WHERE user_id = ? AND date = ? AND day_of_week = ?
+               ORDER BY exercise_index""",
+            (user_id, date, day_of_week)
+        )
+        records = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return records
+    
+    # Методы для ENG плана на неделю
+    def set_eng_plan(self, user_id: int, day_of_week: int, exercises: str) -> bool:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        cursor.execute(
+            "SELECT id FROM eng_plans WHERE user_id = ? AND day_of_week = ?",
+            (user_id, day_of_week)
+        )
+        if cursor.fetchone():
+            cursor.execute(
+                "UPDATE eng_plans SET exercises = ?, updated_at = ? WHERE user_id = ? AND day_of_week = ?",
+                (exercises, now, user_id, day_of_week)
+            )
+        else:
+            cursor.execute(
+                "INSERT INTO eng_plans (user_id, day_of_week, exercises, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (user_id, day_of_week, exercises, now, now)
+            )
+        conn.commit()
+        conn.close()
+        return True
+    
+    def get_eng_plan(self, user_id: int, day_of_week: int) -> Optional[str]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT exercises FROM eng_plans WHERE user_id = ? AND day_of_week = ?", (user_id, day_of_week))
+        result = cursor.fetchone()
+        conn.close()
+        return result[0] if result else None
+    
+    def get_all_eng_plans(self, user_id: int) -> list:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT day_of_week, exercises FROM eng_plans WHERE user_id = ?", (user_id,))
+        results = cursor.fetchall()
+        conn.close()
+        return [{'day_of_week': row[0], 'exercises': row[1]} for row in results]
+    
+    def delete_eng_plan(self, user_id: int, day_of_week: int) -> bool:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM eng_plans WHERE user_id = ? AND day_of_week = ?", (user_id, day_of_week))
+        conn.commit()
+        conn.close()
+        return True
+    
+    def mark_eng_exercise_completed(
+        self, user_id: int, date: str, day_of_week: int,
+        exercise_index: int, exercise_name: str, completed: bool
+    ) -> bool:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        cursor.execute(
+            """INSERT INTO eng_exercise_completions 
+               (user_id, date, day_of_week, exercise_index, exercise_name, completed, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, date, day_of_week, exercise_index, exercise_name, 1 if completed else 0, now)
+        )
+        conn.commit()
+        conn.close()
+        return True
+    
+    def get_eng_exercise_completions_for_date(
+        self, user_id: int, date: str, day_of_week: int
+    ) -> List[Dict[str, Any]]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT * FROM eng_exercise_completions 
+               WHERE user_id = ? AND date = ? AND day_of_week = ?
+               ORDER BY exercise_index""",
+            (user_id, date, day_of_week)
+        )
         records = [dict(row) for row in cursor.fetchall()]
         conn.close()
         return records
@@ -1306,6 +1501,9 @@ class Database:
             cursor.execute("DELETE FROM sleep_records WHERE user_id = ?", (user_id,))
             cursor.execute("DELETE FROM workout_plans WHERE user_id = ?", (user_id,))
             cursor.execute("DELETE FROM workout_completions WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM workout_exercise_completions WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM eng_plans WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM eng_exercise_completions WHERE user_id = ?", (user_id,))
             cursor.execute("DELETE FROM brain_dumps WHERE user_id = ?", (user_id,))
             cursor.execute("DELETE FROM learning_notes WHERE user_id = ?", (user_id,))
             cursor.execute("DELETE FROM focus_tasks WHERE user_id = ?", (user_id,))
