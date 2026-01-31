@@ -821,7 +821,7 @@ async def process_eng_single_day(message: Message, state: FSMContext):
             f"Введи упражнения текстом на {day_name}:",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Отмена", callback_data="eng_training")]
-            ])
+            ]))
 
 
 @dp.callback_query(F.data.startswith("eng_delete_day_"))
