@@ -157,30 +157,35 @@ def generate_stats_charts(sessions: List[Dict[str, Any]]) -> io.BytesIO:
     
     df = pd.DataFrame(data)
     
-    # Создаем 3 подграфика
+    # Создаем 3 подграфика — линейные графики для наглядного отображения трендов
     fig, axes = plt.subplots(3, 1, figsize=(12, 10))
     
+    # Общий стиль: линия с маркерами, чёткие оси
+    line_style = {'linewidth': 2, 'marker': 'o', 'markersize': 5}
+    
     # 1. Сессии по дням
-    sessions_by_date = df.groupby('date').size()
-    axes[0].bar(sessions_by_date.index, sessions_by_date.values, color='steelblue')
+    sessions_by_date = df.groupby('date').size().sort_index()
+    axes[0].plot(sessions_by_date.index, sessions_by_date.values, color='steelblue', **line_style)
     axes[0].set_title('Количество сессий по дням', fontweight='bold')
     axes[0].set_xlabel('Дата')
     axes[0].set_ylabel('Количество сессий')
     axes[0].tick_params(axis='x', rotation=45)
     axes[0].grid(True, alpha=0.3)
+    axes[0].set_ylim(bottom=0)
     
     # 2. Средняя длительность
-    avg_duration = df.groupby('date')['duration'].mean()
-    axes[1].plot(avg_duration.index, avg_duration.values, marker='o', color='green', linewidth=2)
+    avg_duration = df.groupby('date')['duration'].mean().sort_index()
+    axes[1].plot(avg_duration.index, avg_duration.values, color='green', **line_style)
     axes[1].set_title('Средняя длительность сессий (минуты)', fontweight='bold')
     axes[1].set_xlabel('Дата')
     axes[1].set_ylabel('Минуты')
     axes[1].tick_params(axis='x', rotation=45)
     axes[1].grid(True, alpha=0.3)
+    axes[1].set_ylim(bottom=0)
     
     # 3. Процент завершённых
-    completion_rate = df.groupby('date')['completed'].mean() * 100
-    axes[2].bar(completion_rate.index, completion_rate.values, color='orange')
+    completion_rate = (df.groupby('date')['completed'].mean() * 100).sort_index()
+    axes[2].plot(completion_rate.index, completion_rate.values, color='orange', **line_style)
     axes[2].set_title('Процент завершённых сессий', fontweight='bold')
     axes[2].set_xlabel('Дата')
     axes[2].set_ylabel('Процент (%)')
@@ -246,12 +251,13 @@ def generate_sleep_chart(sleep_records: List[Dict[str, Any]]) -> io.BytesIO:
     df = pd.DataFrame(data)
     df = df.sort_values('date')
     
-    # Создаем график
+    # Создаем линейный график
     fig, ax = plt.subplots(figsize=(12, 6))
     
-    ax.bar(df['date'], df['duration'], color='navy', alpha=0.7)
+    ax.plot(df['date'], df['duration'], color='navy', linewidth=2, marker='o', markersize=5)
     ax.axhline(y=7, color='green', linestyle='--', linewidth=2, label='Рекомендуемый минимум (7ч)')
     ax.axhline(y=6, color='orange', linestyle='--', linewidth=2, label='Минимум (6ч)')
+    ax.set_ylim(bottom=0)
     
     ax.set_title('График сна', fontsize=14, fontweight='bold')
     ax.set_xlabel('Дата')
