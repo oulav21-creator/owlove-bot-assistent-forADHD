@@ -781,7 +781,7 @@ async def eng_edit_day_handler(callback: CallbackQuery, state: FSMContext):
             f"Введи упражнения на {day_name}:",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Отмена", callback_data="eng_training")]
-            ])
+            ]))
 
 
 @dp.message(EngPlanStates.editing_single_day)
