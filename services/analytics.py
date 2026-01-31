@@ -69,6 +69,11 @@ def generate_productivity_heatmap(sessions: List[Dict[str, Any]]) -> io.BytesIO:
     pivot_table = pivot.pivot(index='weekday', columns='hour', values='success')
     pivot_table = pivot_table.fillna(0)
     
+    # Всегда показываем все 7 дней и часы 0–23 для избежания FixedLocator/labels mismatch
+    all_weekdays = list(range(7))
+    all_hours = list(range(24))
+    pivot_table = pivot_table.reindex(index=all_weekdays, columns=all_hours, fill_value=0)
+    
     # Создаем график
     fig, ax = plt.subplots(figsize=(14, 6))
     

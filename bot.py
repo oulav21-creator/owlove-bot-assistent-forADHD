@@ -1215,8 +1215,9 @@ async def anal_stats_handler(callback: CallbackQuery):
     
     try:
         stats_buf = generate_stats_charts(sessions)
+        photo_file = BufferedInputFile(stats_buf.read(), filename="stats.png")
         await callback.message.answer_photo(
-            photo=stats_buf,
+            photo=photo_file,
             caption="Статистика: сессии по дням, средняя длительность, процент завершённых"
         )
     except Exception as e:
